@@ -1,0 +1,16 @@
+appId: com.pulse.debug
+---
+- launchApp
+- assertVisible: "fitbit"
+- assertVisible: "Steps"
+- tapOn:
+    id: "avatar"
+    optional: true
+- back
+- tapOn: "Steps"
+- assertVisible: "steps per day (avg)"
+- tapOn: "Week"
+- tapOn: "Month"
+- tapOn: "3M"
+- back
+- assertVisible: "fitbit"

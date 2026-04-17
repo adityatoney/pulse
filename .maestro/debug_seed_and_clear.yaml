@@ -1,0 +1,15 @@
+appId: com.pulse.debug
+---
+# Open the debug menu via deep link (reliable even without tapping the chip)
+- launchApp
+- openLink: "pulse://debug"
+- assertVisible: "Debug Menu"
+- tapOn: "Seed realistic week"
+- back
+- assertVisible: "fitbit"
+# After seeding the dashboard should show some steps count
+- assertVisible: "Steps"
+- openLink: "pulse://debug"
+- tapOn: "Clear local Room cache"
+- tapOn: "Confirm"
+- back

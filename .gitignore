@@ -1,0 +1,42 @@
+*.iml
+.gradle
+.idea/
+.DS_Store
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.apk
+*.ap_
+*.aab
+.kotlin/
+
+# Android Studio
+.navigation/
+
+# Keystores
+*.jks
+*.keystore
+release/
+
+# Convex
+convex/_generated/
+.convex/
+.env
+.env.local
+.env.docker
+
+# Node
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Screenshot test outputs
+**/screenshots/actual/
+**/screenshots/diff/
+
+# Maestro
+.maestro/reports/

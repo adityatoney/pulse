@@ -1,0 +1,16 @@
+# Copy this to local.properties (gitignored) and fill in values.
+# local.properties is read by Android Gradle Plugin for sdk.dir and by our
+# convention plugins for secrets + endpoints that we don't commit.
+
+sdk.dir=/Users/YOUR_USER/Library/Android/sdk
+
+# Convex dev deployment URL.
+# Port 10710 is assigned via the project's port registry (Fitbit = project #7).
+# Emulator reaches laptop via 10.0.2.2; real device uses your LAN IP or a cloud deploy URL.
+CONVEX_URL=http://10.0.2.2:10710
+
+# Optional: Convex admin/auth token for dev (leave blank for anonymous).
+CONVEX_AUTH_TOKEN=
+
+# Optional: Google OAuth client ID for Credential Manager / Google Sign-In (web client ID).
+GOOGLE_WEB_CLIENT_ID=

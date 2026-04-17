@@ -1,0 +1,378 @@
+package com.pulse.feature.detail.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.flowWithLifecycle
+import com.pulse.core.designsystem.theme.LocalRingPalette
+import com.pulse.core.ui.badges.DeltaDirection
+import com.pulse.core.ui.badges.WoWMoMBadge
+import com.pulse.core.ui.list.PeriodComparisonList
+import com.pulse.core.ui.list.PeriodComparisonRow
+import com.pulse.domain.model.MetricType
+import com.pulse.domain.model.Timeframe
+import com.pulse.domain.model.TrendDirection
+import com.pulse.feature.detail.state.MetricDetailEffect
+import com.pulse.feature.detail.state.MetricDetailIntent
+import com.pulse.feature.detail.state.MetricDetailState
+import com.pulse.feature.detail.viewmodel.MetricDetailViewModel
+import kotlinx.datetime.DatePeriod
+import kotlinx.datetime.DayOfWeek
+import kotlinx.datetime.Instant
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.minus
+import kotlinx.datetime.plus
+import kotlinx.datetime.toLocalDateTime
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MetricDetailRoute(
+    onBack: () -> Unit,
+    viewModel: MetricDetailViewModel = hiltViewModel(),
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(viewModel) {
+        viewModel.effects
+            .flowWithLifecycle(lifecycleOwner.lifecycle, Lifecycle.State.STARTED)
+            .collect { effect ->
+                when (effect) {
+                    MetricDetailEffect.NavigateBack -> onBack()
+                    is MetricDetailEffect.ShowSnackbar -> Unit
+                }
+            }
+    }
+    MetricDetailScreen(state = state, onIntent = viewModel::onIntent, onBack = onBack)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MetricDetailScreen(
+    state: MetricDetailState,
+    onIntent: (MetricDetailIntent) -> Unit,
+    onBack: () -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(titleFor(state.metric), style = MaterialTheme.typography.titleLarge) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background,
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 32.dp),
+        ) {
+            item { TimeframeTabs(state.timeframe, onIntent) }
+            item { PeriodPager(state, onIntent) }
+            item { HeadlineBlock(state) }
+            item {
+                val points = state.series?.points.orEmpty()
+                val values = points.map { it.value.toFloat() }
+                val goal = state.goal?.toFloat()
+                val labels = barLabels(state)
+                val zone = TimeZone.currentSystemDefault()
+                MetricBarChart(
+                    values = values,
+                    goal = goal,
+                    labels = labels,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    onBarTapped = if (state.timeframe == Timeframe.ThreeMonths) { index ->
+                        val point = points.getOrNull(index)
+                        if (point != null) {
+                            val monthDate = point.bucketStart.toLocalDateTime(zone).date
+                            // Anchor to the last day of that month so the Month view covers it fully
+                            val firstOfMonth = LocalDate(monthDate.year, monthDate.monthNumber, 1)
+                            val lastOfMonth = firstOfMonth.plus(DatePeriod(months = 1)).minus(DatePeriod(days = 1))
+                            onIntent(MetricDetailIntent.DrillIntoMonth(lastOfMonth))
+                        }
+                    } else null,
+                )
+            }
+            item {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    WoWMoMBadge("WoW", state.wow?.value, state.wow?.direction?.toDelta())
+                    WoWMoMBadge("MoM", state.mom?.value, state.mom?.direction?.toDelta())
+                }
+            }
+            item {
+                PeriodComparisonList(
+                    rows = state.comparisons.map { PeriodComparisonRow(it.label, it.value, it.subtitle) },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimeframeTabs(current: Timeframe, onIntent: (MetricDetailIntent) -> Unit) {
+    val timeframes = Timeframe.entries
+    val idx = timeframes.indexOf(current).coerceAtLeast(0)
+    ScrollableTabRow(
+        selectedTabIndex = idx,
+        edgePadding = 16.dp,
+        containerColor = MaterialTheme.colorScheme.background,
+    ) {
+        timeframes.forEach { tf ->
+            Tab(
+                selected = tf == current,
+                onClick = { onIntent(MetricDetailIntent.ChangeTimeframe(tf)) },
+                text = { Text(tf.label) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PeriodPager(state: MetricDetailState, onIntent: (MetricDetailIntent) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = { onIntent(MetricDetailIntent.MovePeriod(forward = false)) }) {
+            Icon(Icons.Outlined.ChevronLeft, contentDescription = "Previous period")
+        }
+        Text(
+            text = periodLabel(state),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        IconButton(onClick = { onIntent(MetricDetailIntent.MovePeriod(forward = true)) }) {
+            Icon(Icons.Outlined.ChevronRight, contentDescription = "Next period")
+        }
+    }
+}
+
+@Composable
+private fun HeadlineBlock(state: MetricDetailState) {
+    Column(Modifier.padding(horizontal = 16.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = formatHeadlineNumber(state),
+                style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = subtitleFor(state),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = helperTextFor(state),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun titleFor(metric: MetricType): String = when (metric) {
+    MetricType.Steps -> "Steps"
+    MetricType.Distance -> "Distance"
+    MetricType.Calories, MetricType.ActiveCalories -> "Calories"
+    MetricType.ZoneMinutes -> "Zone Minutes"
+    MetricType.HeartRate -> "Heart Rate"
+    MetricType.RestingHeartRate -> "Resting HR"
+    MetricType.Sleep -> "Sleep"
+    MetricType.Floors -> "Floors"
+    MetricType.Speed -> "Speed"
+    MetricType.Exercise -> "Exercise"
+    MetricType.Weight -> "Weight"
+    MetricType.BodyFat -> "Body Fat"
+    MetricType.SpO2 -> "SpO2"
+    MetricType.SkinTemperature -> "Skin Temp"
+    MetricType.HRV -> "HRV"
+    MetricType.VO2Max -> "VO2 Max"
+}
+
+private fun formatHeadlineNumber(state: MetricDetailState): String {
+    val value = if (state.timeframe == Timeframe.Day) state.total else state.average
+    return when (state.metric) {
+        MetricType.Steps, MetricType.Calories, MetricType.ActiveCalories, MetricType.ZoneMinutes ->
+            value.toInt().toString()
+        MetricType.Distance -> "%.2f".format(value)
+        else -> "%.1f".format(value)
+    }
+}
+
+private fun subtitleFor(state: MetricDetailState): String {
+    val tf = state.timeframe
+    val bucketLabel = when (tf) {
+        Timeframe.Day -> "today"
+        Timeframe.Week -> "per day (avg)"
+        Timeframe.Month -> "per week (avg)"
+        Timeframe.ThreeMonths, Timeframe.SixMonths, Timeframe.Year -> "per month (avg)"
+    }
+    return when (state.metric) {
+        MetricType.Steps -> if (tf == Timeframe.Day) "steps today" else "steps $bucketLabel"
+        MetricType.Distance -> if (tf == Timeframe.Day) "miles today" else "mi $bucketLabel"
+        MetricType.Calories, MetricType.ActiveCalories -> if (tf == Timeframe.Day) "cal today" else "cal $bucketLabel"
+        MetricType.ZoneMinutes -> if (tf == Timeframe.Day) "zone min today" else "zone min $bucketLabel"
+        else -> bucketLabel
+    }
+}
+
+private fun helperTextFor(state: MetricDetailState): String {
+    if (state.timeframe == Timeframe.Day) {
+        val goal = state.goal
+        return if (goal != null && goal > 0) {
+            val pct = (state.total / goal * 100).toInt()
+            "$pct% of daily goal"
+        } else ""
+    }
+    val total = state.total.toInt()
+    val hits = state.goalHitDays
+    val bucketWord = when (state.timeframe) {
+        Timeframe.Week -> "day"
+        Timeframe.Month -> "week"
+        Timeframe.ThreeMonths, Timeframe.SixMonths, Timeframe.Year -> "month"
+        else -> "day"
+    }
+    val bucketPlural = if (hits == 1) bucketWord else "${bucketWord}s"
+    return when (state.metric) {
+        MetricType.Steps -> "You hit your goal on $hits $bucketPlural so far, and took a total of $total steps"
+        MetricType.Distance -> "You've covered %.2f miles in this range".format(state.total)
+        MetricType.Calories, MetricType.ActiveCalories -> "Total of $total calories burned in this range"
+        MetricType.ZoneMinutes -> "Total of $total zone minutes"
+        else -> ""
+    }
+}
+
+private fun periodLabel(state: MetricDetailState): String {
+    val anchor = state.periodAnchor
+    return when (state.timeframe) {
+        Timeframe.Day -> {
+            val dow = anchor.dayOfWeek.name.take(3).lowercase()
+                .replaceFirstChar { it.uppercase() }
+            val mon = anchor.month.name.take(3).lowercase()
+                .replaceFirstChar { it.uppercase() }
+            "$dow, $mon ${anchor.dayOfMonth}"
+        }
+        Timeframe.Week -> {
+            val dow = anchor.dayOfWeek.ordinal
+            val monday = anchor.minus(DatePeriod(days = dow))
+            val sunday = monday.plus(DatePeriod(days = 6))
+            val mLabel = "${monday.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }} ${monday.dayOfMonth}"
+            val sLabel = "${sunday.dayOfMonth}"
+            "$mLabel – $sLabel"
+        }
+        Timeframe.Month -> {
+            val mon = anchor.month.name.take(3).lowercase()
+                .replaceFirstChar { it.uppercase() }
+            "$mon ${anchor.year}"
+        }
+        Timeframe.ThreeMonths -> {
+            val end = anchor
+            val start = anchor.minus(DatePeriod(months = 3))
+            val sLabel = start.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+            val eLabel = end.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+            "$sLabel – $eLabel ${end.year}"
+        }
+        Timeframe.SixMonths -> {
+            val end = anchor
+            val start = anchor.minus(DatePeriod(months = 6))
+            val sLabel = start.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+            val eLabel = end.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+            "$sLabel – $eLabel ${end.year}"
+        }
+        Timeframe.Year -> "${anchor.year}"
+    }
+}
+
+private fun barLabels(state: MetricDetailState): List<String> {
+    val zone = TimeZone.currentSystemDefault()
+    return when (state.timeframe) {
+        Timeframe.Week -> listOf("M", "T", "W", "T", "F", "S", "S")
+        Timeframe.Month -> {
+            // Weekly buckets: compact "M/D" labels to avoid overlap
+            val points = state.series?.points.orEmpty()
+            points.map { p ->
+                val d = p.bucketStart.toLocalDateTime(zone).date
+                "${d.monthNumber}/${d.dayOfMonth}"
+            }
+        }
+        Timeframe.Day -> {
+            // 24 hourly labels: 12AM, 4AM, 8AM, 12PM, 4PM, 8PM, 11PM
+            val keyHours = setOf(0, 4, 8, 12, 16, 20, 23)
+            (0..23).map { h ->
+                if (h in keyHours) {
+                    when {
+                        h == 0 -> "12AM"
+                        h < 12 -> "${h}AM"
+                        h == 12 -> "12PM"
+                        h == 23 -> "11PM"
+                        else -> "${h - 12}PM"
+                    }
+                } else ""
+            }
+        }
+        else -> {
+            // 3M/6M/Year: monthly buckets, show month abbreviation
+            val points = state.series?.points.orEmpty()
+            points.map { p ->
+                val d = p.bucketStart.toLocalDateTime(zone).date
+                d.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+            }
+        }
+    }
+}
+
+private fun TrendDirection.toDelta() = when (this) {
+    TrendDirection.Up -> DeltaDirection.Up
+    TrendDirection.Down -> DeltaDirection.Down
+    TrendDirection.Flat -> DeltaDirection.Flat
+}

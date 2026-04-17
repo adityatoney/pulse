@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option java_package = "com.pulse.data.proto";
+option java_multiple_files = true;
+
+message FeatureFlags {
+    bool shared_element_transitions = 1;
+    bool vico_gradient_bars = 2;
+    bool wow_mom_on_dashboard = 3;
+    bool google_health_reconcile = 4;
+    bool force_dark_mode = 5;
+    bool fault_injection_active = 6;
+    int64 fault_injection_expires_at_ms = 7;
+    bool use_dynamic_color = 8;
+}
+
+message Preferences {
+    string device_id = 1;
+    string user_display_name = 2;
+    string user_avatar_url = 3;
+    string health_connect_change_token = 4;
+    int64 last_push_at_ms = 5;
+    int64 last_pull_at_ms = 6;
+}

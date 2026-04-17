@@ -1,0 +1,57 @@
+package com.pulse.feature.you.state
+
+import com.pulse.domain.model.MetricType
+import com.pulse.domain.usecase.ZoneMinuteCalculator
+
+data class GoalSetting(
+    val metric: MetricType,
+    val label: String,
+    val unit: String,
+    val dailyTarget: Int,
+    val weeklyTarget: Int,
+    val step: Int,
+    val min: Int,
+    val max: Int,
+)
+
+data class YouState(
+    val displayName: String = "Aditya",
+    val age: Int = 45,
+    val restingHr: Int = 72,
+    val maxHr: Int = 175,
+    val thresholds: ZoneMinuteCalculator.ZoneThresholds = ZoneMinuteCalculator.thresholds(72, 45),
+    val memberSince: String = "2024",
+
+    // Goals
+    val goals: List<GoalSetting> = listOf(
+        GoalSetting(MetricType.Steps, "Steps", "steps", 10_000, 70_000, 500, 1000, 50_000),
+        GoalSetting(MetricType.Distance, "Distance", "miles", 5, 35, 1, 1, 30),
+        GoalSetting(MetricType.ActiveCalories, "Calories burned", "cal", 500, 3_500, 50, 100, 5_000),
+        GoalSetting(MetricType.ZoneMinutes, "Active zone min", "min", 30, 150, 5, 5, 300),
+    ),
+
+    // This week's actuals
+    val weekSteps: Int = 0,
+    val weekDistance: Double = 0.0,
+    val weekCalories: Int = 0,
+    val weekZoneMin: Int = 0,
+    val weekExercises: Int = 0,
+    val todaySteps: Int = 0,
+
+    // Editing
+    val editingGoal: GoalSetting? = null,
+)
+
+sealed interface YouIntent {
+    data class UpdateAge(val age: Int) : YouIntent
+    data class UpdateRestingHr(val hr: Int) : YouIntent
+    data class UpdateMaxHr(val hr: Int) : YouIntent
+    data class EditGoal(val metric: MetricType) : YouIntent
+    data object DismissGoalEditor : YouIntent
+    data class SaveDailyGoal(val metric: MetricType, val target: Int) : YouIntent
+    data object Back : YouIntent
+}
+
+sealed interface YouEffect {
+    data object NavigateBack : YouEffect
+}
