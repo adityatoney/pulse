@@ -12,6 +12,7 @@ message FeatureFlags {
     bool fault_injection_active = 6;
     int64 fault_injection_expires_at_ms = 7;
     bool use_dynamic_color = 8;
+    bool drive_backup_enabled = 9;
 }
 
 message Preferences {
@@ -21,4 +22,8 @@ message Preferences {
     string health_connect_change_token = 4;
     int64 last_push_at_ms = 5;
     int64 last_pull_at_ms = 6;
+    int64 last_backup_at_ms = 7;
+    string drive_backup_file_id = 8;
+    bool activity_only_distance = 9;
+    bool activity_only_calories = 10;
 }

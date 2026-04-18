@@ -15,6 +15,9 @@ interface ExerciseSessionDao {
     @Query("SELECT * FROM exercise_sessions WHERE startUtcMs BETWEEN :fromMs AND :toMs ORDER BY startUtcMs DESC")
     fun observeRange(fromMs: Long, toMs: Long): Flow<List<ExerciseSessionEntity>>
 
+    @Query("SELECT * FROM exercise_sessions WHERE startUtcMs BETWEEN :fromMs AND :toMs ORDER BY startUtcMs ASC")
+    suspend fun getRange(fromMs: Long, toMs: Long): List<ExerciseSessionEntity>
+
     @Query("SELECT * FROM exercise_sessions WHERE dirty = 1 LIMIT :limit")
     suspend fun dirty(limit: Int): List<ExerciseSessionEntity>
 
@@ -44,4 +47,7 @@ interface ExerciseSessionDao {
 
     @Query("DELETE FROM exercise_sessions")
     suspend fun clear()
+
+    @Query("SELECT * FROM exercise_sessions")
+    suspend fun getAll(): List<ExerciseSessionEntity>
 }

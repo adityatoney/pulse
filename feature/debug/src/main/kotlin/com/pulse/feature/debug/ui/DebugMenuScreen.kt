@@ -96,6 +96,10 @@ fun DebugMenuRoute(
                             )
                         }
                     }
+                    DebugMenuEffect.LaunchFitbitSignIn -> {
+                        val intent = viewModel.fitbitAuthManager.buildAuthIntent()
+                        context.startActivity(intent)
+                    }
                 }
             }
     }
@@ -182,6 +186,41 @@ private fun DebugMenuSheetBody(
             }
         }
 
+        SectionHeader("Fitbit API")
+        if (state.fitbitSignedIn) {
+            InfoLine("Status", "Connected")
+            state.fitbitSyncCursor?.let { InfoLine("Last synced to", it) }
+            state.fitbitSyncProgress?.let {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            ActionItem("Force Fitbit sync", "Fetches all history from Fitbit cloud") {
+                onIntent(DebugMenuIntent.ForceFitbitSync)
+            }
+            ActionItem("Disconnect Fitbit", "Clears OAuth tokens") {
+                onIntent(DebugMenuIntent.FitbitSignOut)
+            }
+        } else {
+            InfoLine("Status", "Not connected")
+            ActionItem("Connect Fitbit", "OAuth sign-in for unlimited history") {
+                onIntent(DebugMenuIntent.FitbitSignIn)
+            }
+        }
+
         SectionHeader("Feature flags")
         FlagRow(
             "Shared-element transitions",
@@ -207,22 +246,41 @@ private fun DebugMenuSheetBody(
             "Use dynamic color",
             state.featureFlags.useDynamicColor,
         ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.UseDynamicColor, it)) }
+        FlagRow(
+            "Drive backup (You screen)",
+            state.featureFlags.driveBackupEnabled,
+        ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.DriveBackupEnabled, it)) }
 
         SectionHeader("Data Coverage")
-        val syncWindowText = if (state.syncWindowStart != null && state.syncWindowEnd != null) {
-            "${state.syncWindowStart} to ${state.syncWindowEnd}"
-        } else {
-            "N/A"
-        }
-        InfoLine("HC sync window", syncWindowText)
         val rangeText = if (state.dataRangeStart != null && state.dataRangeEnd != null) {
             "${state.dataRangeStart} to ${state.dataRangeEnd}"
         } else {
             "No data"
         }
         InfoLine("Step data range", rangeText)
-        InfoLine("Step days stored", "${state.totalStepDays}")
+        InfoLine("Step days", "${state.totalStepDays}")
         InfoLine("Exercise sessions", "${state.totalExerciseSessions}")
+        InfoLine("Sleep sessions", "${state.totalSleepSessions}")
+        state.metricCounts.entries
+            .sortedByDescending { it.value }
+            .filter { it.key != "Steps" }
+            .forEach { (metric, count) ->
+                InfoLine(metric, "$count days")
+            }
+
+        SectionHeader("Background Sync")
+        val backfillStatus = when {
+            state.backfillComplete -> "Complete"
+            state.backfillCursor != null -> "In progress (cursor: ${state.backfillCursor})"
+            else -> "Not started"
+        }
+        InfoLine("History backfill", backfillStatus)
+        val syncWindowText = if (state.syncWindowStart != null && state.syncWindowEnd != null) {
+            "${state.syncWindowStart} to ${state.syncWindowEnd}"
+        } else {
+            "N/A"
+        }
+        InfoLine("Periodic sync window", syncWindowText)
 
         SectionHeader("Info")
         state.buildInfo?.let { info ->

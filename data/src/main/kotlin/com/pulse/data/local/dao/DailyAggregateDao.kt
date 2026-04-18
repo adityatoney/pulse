@@ -18,6 +18,9 @@ interface DailyAggregateDao {
     @Query("SELECT * FROM daily_aggregates WHERE date = :date AND metric = :metric")
     fun observe(date: String, metric: String): Flow<DailyAggregateEntity?>
 
+    @Query("SELECT * FROM daily_aggregates WHERE date = :date AND metric = :metric")
+    suspend fun get(date: String, metric: String): DailyAggregateEntity?
+
     @Query("SELECT * FROM daily_aggregates WHERE date = :date")
     fun observeForDate(date: String): Flow<List<DailyAggregateEntity>>
 
@@ -47,4 +50,7 @@ interface DailyAggregateDao {
 
     @Query("SELECT MAX(computedAtMs) FROM daily_aggregates")
     suspend fun latestComputedAtMs(): Long?
+
+    @Query("SELECT * FROM daily_aggregates")
+    suspend fun getAll(): List<DailyAggregateEntity>
 }

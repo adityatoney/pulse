@@ -2,9 +2,16 @@ package com.pulse.feature.you.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.pulse.data.cloud.DriveAuthManager
+import com.pulse.data.cloud.fitbit.FitbitAuthManager
+import com.pulse.data.cloud.fitbit.FitbitSyncManager
+import com.pulse.data.datastore.FeatureFlagRepository
+import com.pulse.data.datastore.PreferencesRepository
 import com.pulse.domain.model.Cadence
 import com.pulse.domain.model.Goal
+import com.pulse.domain.model.DateRange
 import com.pulse.domain.model.MetricType
+import com.pulse.domain.repository.BackupRepository
 import com.pulse.domain.repository.GoalsRepository
 import com.pulse.domain.repository.HealthRepository
 import com.pulse.domain.usecase.ZoneMinuteCalculator
@@ -28,6 +35,12 @@ import javax.inject.Inject
 class YouViewModel @Inject constructor(
     private val goalsRepo: GoalsRepository,
     private val healthRepo: HealthRepository,
+    private val backupRepo: BackupRepository,
+    private val featureFlags: FeatureFlagRepository,
+    private val prefsRepo: PreferencesRepository,
+    val driveAuthManager: DriveAuthManager,
+    val fitbitAuthManager: FitbitAuthManager,
+    private val fitbitSyncManager: FitbitSyncManager,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -40,6 +53,10 @@ class YouViewModel @Inject constructor(
     init {
         loadGoals()
         loadWeeklyStats()
+        observeFeatureFlags()
+        observeDisplayPrefs()
+        loadBackupStatus()
+        loadFitbitStatus()
     }
 
     fun onIntent(intent: YouIntent) {
@@ -102,7 +119,92 @@ class YouViewModel @Inject constructor(
                 }
             }
             YouIntent.Back -> _effects.trySend(YouEffect.NavigateBack)
+            YouIntent.FitbitSignIn -> _effects.trySend(YouEffect.LaunchFitbitSignIn)
+            YouIntent.FitbitSignOut -> {
+                viewModelScope.launch {
+                    fitbitAuthManager.signOut()
+                    _state.update { it.copy(fitbitConnected = false, fitbitSyncCursor = null) }
+                }
+            }
+            YouIntent.DriveSignIn -> _effects.trySend(YouEffect.LaunchDriveSignIn)
+            YouIntent.DriveSignOut -> {
+                viewModelScope.launch {
+                    driveAuthManager.signOut()
+                    _state.update { it.copy(driveSignedIn = false, lastBackupTime = null, lastBackupSize = null) }
+                }
+            }
+            YouIntent.BackupNow -> {
+                viewModelScope.launch {
+                    _state.update { it.copy(backupInProgress = true, backupMessage = null) }
+                    backupRepo.backup()
+                        .onSuccess { info ->
+                            _state.update {
+                                it.copy(
+                                    backupInProgress = false,
+                                    lastBackupTime = info.modifiedTime,
+                                    lastBackupSize = formatBytes(info.sizeBytes),
+                                    backupMessage = "Backup complete",
+                                )
+                            }
+                        }
+                        .onFailure { e ->
+                            _state.update {
+                                it.copy(
+                                    backupInProgress = false,
+                                    backupMessage = "Backup failed: ${e.message}",
+                                )
+                            }
+                        }
+                }
+            }
+            YouIntent.RestoreNow -> {
+                viewModelScope.launch {
+                    _state.update { it.copy(restoreInProgress = true, backupMessage = null) }
+                    backupRepo.restore()
+                        .onSuccess { count ->
+                            _state.update {
+                                it.copy(
+                                    restoreInProgress = false,
+                                    backupMessage = "Restored $count records",
+                                )
+                            }
+                        }
+                        .onFailure { e ->
+                            _state.update {
+                                it.copy(
+                                    restoreInProgress = false,
+                                    backupMessage = "Restore failed: ${e.message}",
+                                )
+                            }
+                        }
+                }
+            }
+            YouIntent.DismissBackupMessage -> {
+                _state.update { it.copy(backupMessage = null) }
+            }
+            is YouIntent.SetActivityOnlyDistance -> {
+                viewModelScope.launch {
+                    prefsRepo.setActivityOnlyDistance(intent.enabled)
+                    triggerResync()
+                }
+            }
+            is YouIntent.SetActivityOnlyCalories -> {
+                viewModelScope.launch {
+                    prefsRepo.setActivityOnlyCalories(intent.enabled)
+                    triggerResync()
+                }
+            }
         }
+    }
+
+    fun onSignInResult(success: Boolean, message: String?) {
+        _state.update {
+            it.copy(
+                driveSignedIn = success,
+                backupMessage = if (!success) "Sign-in failed: $message" else null,
+            )
+        }
+        if (success) loadBackupStatus()
     }
 
     private fun loadGoals() {
@@ -136,5 +238,71 @@ class YouViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun triggerResync() {
+        val today = clock.today()
+        val jToday = java.time.LocalDate.of(today.year, today.monthNumber, today.dayOfMonth)
+        val jStart = jToday.minusDays(30)
+        val start = kotlinx.datetime.LocalDate(jStart.year, jStart.monthValue, jStart.dayOfMonth)
+        healthRepo.refreshFromHealthConnect(DateRange(start, today))
+    }
+
+    private fun observeDisplayPrefs() {
+        viewModelScope.launch {
+            prefsRepo.observeMetricDisplay().collect { prefs ->
+                _state.update {
+                    it.copy(
+                        activityOnlyDistance = prefs.activityOnlyDistance,
+                        activityOnlyCalories = prefs.activityOnlyCalories,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun observeFeatureFlags() {
+        viewModelScope.launch {
+            featureFlags.observe().collect { flags ->
+                _state.update {
+                    it.copy(backupEnabled = flags.driveBackupEnabled)
+                }
+            }
+        }
+    }
+
+    private fun loadBackupStatus() {
+        viewModelScope.launch {
+            val signedIn = backupRepo.isBackupAvailable
+            _state.update { it.copy(driveSignedIn = signedIn) }
+            if (signedIn) {
+                val info = backupRepo.findBackup()
+                if (info != null) {
+                    _state.update {
+                        it.copy(
+                            lastBackupTime = info.modifiedTime,
+                            lastBackupSize = formatBytes(info.sizeBytes),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loadFitbitStatus() {
+        viewModelScope.launch {
+            val connected = fitbitAuthManager.tryRestoreTokens()
+            _state.update { it.copy(fitbitConnected = connected) }
+        }
+    }
+
+    fun onFitbitConnected() {
+        _state.update { it.copy(fitbitConnected = true) }
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
+        else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     }
 }

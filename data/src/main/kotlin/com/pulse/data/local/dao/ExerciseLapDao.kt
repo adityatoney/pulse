@@ -14,4 +14,7 @@ interface ExerciseLapDao {
 
     @Query("SELECT * FROM exercise_laps WHERE sessionId = :sessionId ORDER BY lapNumber ASC")
     suspend fun forSession(sessionId: String): List<ExerciseLapEntity>
+
+    @Query("SELECT * FROM exercise_laps")
+    suspend fun getAll(): List<ExerciseLapEntity>
 }

@@ -5,7 +5,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import com.pulse.data.local.dao.DailyAggregateDao
-import com.pulse.data.work.HealthConnectSyncWorker
+import com.pulse.data.work.ImmediateSyncWorker
 import com.pulse.domain.model.SyncOutcome
 import com.pulse.domain.model.SyncPhase
 import com.pulse.domain.model.SyncStatus
@@ -44,9 +44,9 @@ class SyncRepositoryImpl @Inject constructor(
     override suspend fun pullReconciled(since: Instant): SyncOutcome = SyncOutcome.NoOp
 
     override suspend fun forceSyncNow(): SyncOutcome {
-        val req = OneTimeWorkRequestBuilder<HealthConnectSyncWorker>()
+        val req = OneTimeWorkRequestBuilder<ImmediateSyncWorker>()
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            .addTag(HealthConnectSyncWorker.TAG)
+            .addTag(ImmediateSyncWorker.TAG)
             .build()
         workManager.enqueueUniqueWork("health-sync-now", ExistingWorkPolicy.REPLACE, req)
         return SyncOutcome.Ok(0)

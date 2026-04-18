@@ -17,4 +17,7 @@ interface ExerciseHrSampleDao {
 
     @Query("DELETE FROM exercise_hr_samples WHERE sessionId = :sessionId")
     suspend fun deleteForSession(sessionId: String)
+
+    @Query("SELECT * FROM exercise_hr_samples")
+    suspend fun getAll(): List<ExerciseHrSampleEntity>
 }

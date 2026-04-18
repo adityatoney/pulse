@@ -20,4 +20,7 @@ interface SleepSessionDao {
 
     @Query("DELETE FROM sleep_sessions")
     suspend fun clear()
+
+    @Query("SELECT * FROM sleep_sessions")
+    suspend fun getAll(): List<SleepSessionEntity>
 }

@@ -40,6 +40,24 @@ data class YouState(
 
     // Editing
     val editingGoal: GoalSetting? = null,
+
+    // Fitbit
+    val fitbitConnected: Boolean = false,
+    val fitbitSyncCursor: String? = null,
+    val fitbitSyncing: Boolean = false,
+
+    // Display preferences
+    val activityOnlyDistance: Boolean = false,
+    val activityOnlyCalories: Boolean = false,
+
+    // Backup
+    val backupEnabled: Boolean = false,
+    val driveSignedIn: Boolean = false,
+    val lastBackupTime: String? = null,
+    val lastBackupSize: String? = null,
+    val backupInProgress: Boolean = false,
+    val restoreInProgress: Boolean = false,
+    val backupMessage: String? = null,
 )
 
 sealed interface YouIntent {
@@ -50,8 +68,19 @@ sealed interface YouIntent {
     data object DismissGoalEditor : YouIntent
     data class SaveDailyGoal(val metric: MetricType, val target: Int) : YouIntent
     data object Back : YouIntent
+    data object FitbitSignIn : YouIntent
+    data object FitbitSignOut : YouIntent
+    data object DriveSignIn : YouIntent
+    data object DriveSignOut : YouIntent
+    data object BackupNow : YouIntent
+    data object RestoreNow : YouIntent
+    data object DismissBackupMessage : YouIntent
+    data class SetActivityOnlyDistance(val enabled: Boolean) : YouIntent
+    data class SetActivityOnlyCalories(val enabled: Boolean) : YouIntent
 }
 
 sealed interface YouEffect {
     data object NavigateBack : YouEffect
+    data object LaunchDriveSignIn : YouEffect
+    data object LaunchFitbitSignIn : YouEffect
 }

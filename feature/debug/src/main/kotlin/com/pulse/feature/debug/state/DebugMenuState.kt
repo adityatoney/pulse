@@ -21,6 +21,13 @@ data class DebugMenuState(
     val syncWindowEnd: String? = null,
     val syncWorkerState: SyncWorkerState = SyncWorkerState.Idle,
     val googleHealthSignedIn: Boolean = false,
+    val fitbitSignedIn: Boolean = false,
+    val fitbitSyncCursor: String? = null,
+    val fitbitSyncProgress: String? = null,
+    val totalSleepSessions: Int = 0,
+    val metricCounts: Map<String, Int> = emptyMap(),
+    val backfillCursor: String? = null,
+    val backfillComplete: Boolean = false,
 )
 
 enum class ConfirmAction { ClearCache, HardReset }
@@ -42,6 +49,9 @@ sealed interface DebugMenuIntent {
     data class ToggleFlag(val key: FeatureFlagKey, val value: Boolean) : DebugMenuIntent
     data object GoogleHealthSignIn : DebugMenuIntent
     data object GoogleHealthSignOut : DebugMenuIntent
+    data object FitbitSignIn : DebugMenuIntent
+    data object FitbitSignOut : DebugMenuIntent
+    data object ForceFitbitSync : DebugMenuIntent
     data object Dismiss : DebugMenuIntent
 }
 
@@ -53,4 +63,5 @@ sealed interface DebugMenuEffect {
     data object NavigateBack : DebugMenuEffect
     data class NavigateToRecordDump(val records: String) : DebugMenuEffect
     data object LaunchGoogleSignIn : DebugMenuEffect
+    data object LaunchFitbitSignIn : DebugMenuEffect
 }

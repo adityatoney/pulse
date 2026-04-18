@@ -17,6 +17,7 @@ data class FeatureFlagSnapshot(
     val faultInjectionActive: Boolean,
     val faultInjectionExpiresAtMs: Long,
     val useDynamicColor: Boolean,
+    val driveBackupEnabled: Boolean,
 ) {
     companion object {
         val Default = FeatureFlagSnapshot(
@@ -28,6 +29,7 @@ data class FeatureFlagSnapshot(
             faultInjectionActive = false,
             faultInjectionExpiresAtMs = 0L,
             useDynamicColor = false,
+            driveBackupEnabled = false,
         )
     }
 }
@@ -39,6 +41,7 @@ enum class FeatureFlagKey {
     GoogleHealthReconcile,
     ForceDarkMode,
     UseDynamicColor,
+    DriveBackupEnabled,
 }
 
 @Singleton
@@ -58,6 +61,7 @@ class FeatureFlagRepository @Inject constructor(
                     FeatureFlagKey.GoogleHealthReconcile -> googleHealthReconcile = value
                     FeatureFlagKey.ForceDarkMode -> forceDarkMode = value
                     FeatureFlagKey.UseDynamicColor -> useDynamicColor = value
+                    FeatureFlagKey.DriveBackupEnabled -> driveBackupEnabled = value
                 }
             }.build()
         }
@@ -83,5 +87,6 @@ class FeatureFlagRepository @Inject constructor(
         faultInjectionActive = faultInjectionActive,
         faultInjectionExpiresAtMs = faultInjectionExpiresAtMs,
         useDynamicColor = useDynamicColor,
+        driveBackupEnabled = driveBackupEnabled,
     )
 }

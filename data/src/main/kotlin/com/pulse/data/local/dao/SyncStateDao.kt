@@ -18,4 +18,7 @@ interface SyncStateDao {
 
     @Query("DELETE FROM sync_state")
     suspend fun clear()
+
+    @Query("SELECT * FROM sync_state")
+    suspend fun getAll(): List<SyncStateEntity>
 }

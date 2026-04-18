@@ -43,6 +43,9 @@ interface DebugRepository {
 
     /** Stats about what data is currently stored locally. */
     suspend fun dataStats(): DataStats
+
+    /** Returns the Fitbit sync cursor date (last synced date), or null if never synced. */
+    suspend fun fitbitSyncCursor(): String?
 }
 
 data class DataStats(
@@ -50,6 +53,10 @@ data class DataStats(
     val maxStepDate: String?,
     val totalStepDays: Int,
     val totalExerciseSessions: Int,
+    val totalSleepSessions: Int = 0,
+    val metricCounts: Map<String, Int> = emptyMap(),
+    val backfillCursor: String? = null,
+    val backfillComplete: Boolean = false,
 )
 
 data class DebugBuildInfo(

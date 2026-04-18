@@ -5,8 +5,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.pulse.data.cloud.GoogleHealthAuthManager
+import com.pulse.data.cloud.fitbit.FitbitAuthManager
+import com.pulse.data.cloud.fitbit.FitbitSyncManager
 import com.pulse.data.datastore.FeatureFlagRepository
 import com.pulse.data.work.HealthConnectSyncWorker
+import com.pulse.data.work.SyncScheduler
 import com.pulse.domain.repository.DebugRepository
 import com.pulse.domain.util.Clock
 import com.pulse.feature.debug.state.ConfirmAction
@@ -37,6 +40,9 @@ class DebugMenuViewModel @Inject constructor(
     private val debug: DebugRepository,
     private val featureFlags: FeatureFlagRepository,
     val authManager: GoogleHealthAuthManager,
+    val fitbitAuthManager: FitbitAuthManager,
+    private val fitbitSyncManager: FitbitSyncManager,
+    private val syncScheduler: SyncScheduler,
     private val workManager: WorkManager,
     private val clock: Clock,
 ) : ViewModel() {
@@ -52,8 +58,18 @@ class DebugMenuViewModel @Inject constructor(
             _state.update { it.copy(featureFlags = flags) }
         }.launchIn(viewModelScope)
         _state.update { it.copy(googleHealthSignedIn = authManager.isAuthenticated) }
+        viewModelScope.launch {
+            val fitbitRestored = fitbitAuthManager.tryRestoreTokens()
+            _state.update { it.copy(fitbitSignedIn = fitbitRestored) }
+            if (fitbitRestored) loadFitbitCursor()
+        }
         observeSyncWorker()
         onIntent(DebugMenuIntent.Load)
+    }
+
+    private suspend fun loadFitbitCursor() {
+        val cursor = debug.fitbitSyncCursor()
+        _state.update { it.copy(fitbitSyncCursor = cursor) }
     }
 
     private var userTriggeredSync = false
@@ -96,6 +112,10 @@ class DebugMenuViewModel @Inject constructor(
                 dataRangeEnd = stats.maxStepDate,
                 totalStepDays = stats.totalStepDays,
                 totalExerciseSessions = stats.totalExerciseSessions,
+                totalSleepSessions = stats.totalSleepSessions,
+                metricCounts = stats.metricCounts,
+                backfillCursor = stats.backfillCursor,
+                backfillComplete = stats.backfillComplete,
             )
         }
     }
@@ -126,6 +146,10 @@ class DebugMenuViewModel @Inject constructor(
                         dataRangeEnd = stats.maxStepDate,
                         totalStepDays = stats.totalStepDays,
                         totalExerciseSessions = stats.totalExerciseSessions,
+                        totalSleepSessions = stats.totalSleepSessions,
+                        metricCounts = stats.metricCounts,
+                        backfillCursor = stats.backfillCursor,
+                        backfillComplete = stats.backfillComplete,
                         syncWindowStart = syncStart.toString(),
                         syncWindowEnd = today.toString(),
                     )
@@ -189,6 +213,30 @@ class DebugMenuViewModel @Inject constructor(
             DebugMenuIntent.GoogleHealthSignOut -> viewModelScope.launch {
                 authManager.signOut()
                 _state.update { it.copy(googleHealthSignedIn = false, lastAction = "Google Health signed out") }
+            }
+            DebugMenuIntent.FitbitSignIn -> {
+                _effects.trySend(DebugMenuEffect.LaunchFitbitSignIn)
+            }
+            DebugMenuIntent.FitbitSignOut -> viewModelScope.launch {
+                fitbitAuthManager.signOut()
+                _state.update { it.copy(fitbitSignedIn = false, fitbitSyncCursor = null, lastAction = "Fitbit signed out") }
+            }
+            DebugMenuIntent.ForceFitbitSync -> {
+                val progressJob = viewModelScope.launch {
+                    fitbitSyncManager.progress.collect { msg ->
+                        if (msg.isNotEmpty()) {
+                            _state.update { it.copy(fitbitSyncProgress = msg) }
+                        }
+                    }
+                }
+                viewModelScope.launch {
+                    val result = fitbitSyncManager.sync()
+                    progressJob.cancel()
+                    val msg = if (result.isSuccess) "Fitbit sync complete" else "Fitbit sync failed: ${result.exceptionOrNull()?.message}"
+                    _state.update { it.copy(fitbitSyncProgress = null, lastAction = msg) }
+                    loadFitbitCursor()
+                    refreshDataStats()
+                }
             }
             DebugMenuIntent.Dismiss -> _effects.trySend(DebugMenuEffect.NavigateBack)
         }

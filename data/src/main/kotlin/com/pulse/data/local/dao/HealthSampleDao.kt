@@ -20,4 +20,7 @@ interface HealthSampleDao {
 
     @Query("DELETE FROM health_samples")
     suspend fun clear()
+
+    @Query("SELECT * FROM health_samples")
+    suspend fun getAll(): List<HealthSampleEntity>
 }

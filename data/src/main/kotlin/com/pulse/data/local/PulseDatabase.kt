@@ -51,6 +51,7 @@ abstract class PulseDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "pulse.db"
+        const val VERSION = 4
 
         /** v2 → v3: Add exercise HR samples, laps, and extra columns on exercise_sessions. */
         val MIGRATION_2_3 = object : Migration(2, 3) {

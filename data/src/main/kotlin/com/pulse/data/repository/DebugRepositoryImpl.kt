@@ -339,14 +339,34 @@ class DebugRepositoryImpl @Inject constructor(
         featureFlags.setFaultInjection(durationSeconds * 1000L)
     }
 
-    override suspend fun dataStats(): DataStats = DataStats(
-        minStepDate = db.dailyAggregateDao().minStepDate(),
-        maxStepDate = db.dailyAggregateDao().maxStepDate(),
-        totalStepDays = db.dailyAggregateDao().stepDayCount(),
-        totalExerciseSessions = db.exerciseSessionDao().totalCount(),
-    )
+    override suspend fun dataStats(): DataStats {
+        val aggDao = db.dailyAggregateDao()
+        val metricCounts = aggDao.getAll()
+            .groupBy { it.metric }
+            .mapValues { (_, rows) -> rows.size }
+
+        val backfillCursor = db.syncStateDao().get("hc_backfill_cursor")?.value
+        val today = java.time.LocalDate.now()
+        val earliest = today.minusDays(365)
+        val cursorDate = backfillCursor?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+        val backfillComplete = cursorDate != null && !cursorDate.isAfter(earliest)
+
+        return DataStats(
+            minStepDate = aggDao.minStepDate(),
+            maxStepDate = aggDao.maxStepDate(),
+            totalStepDays = aggDao.stepDayCount(),
+            totalExerciseSessions = db.exerciseSessionDao().totalCount(),
+            totalSleepSessions = db.sleepSessionDao().getAll().size,
+            metricCounts = metricCounts,
+            backfillCursor = backfillCursor,
+            backfillComplete = backfillComplete,
+        )
+    }
 
     override suspend fun pendingQueueSize(): Int = db.dailyAggregateDao().dirtyCount()
+
+    override suspend fun fitbitSyncCursor(): String? =
+        db.syncStateDao().get("fitbit_sync_cursor")?.value
 
     override suspend fun debugBuildInfo(): DebugBuildInfo = DebugBuildInfo(
         appVersion = "0.1.0-debug",

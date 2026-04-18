@@ -50,6 +50,7 @@ vico = "2.0.2"
 
 # Maps
 mapsCompose = "4.3.3"
+playServicesAuth = "21.3.0"
 playServicesMaps = "19.0.0"
 
 # Images
@@ -149,6 +150,7 @@ vico-core = { group = "com.patrykandpatrick.vico", name = "core", version.ref = 
 
 # Google Maps
 maps-compose = { group = "com.google.maps.android", name = "maps-compose", version.ref = "mapsCompose" }
+play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
 play-services-maps = { group = "com.google.android.gms", name = "play-services-maps", version.ref = "playServicesMaps" }
 
 # Coil

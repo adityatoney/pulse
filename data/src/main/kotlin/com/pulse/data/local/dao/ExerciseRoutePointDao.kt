@@ -20,4 +20,7 @@ interface ExerciseRoutePointDao {
 
     @Query("SELECT COUNT(*) > 0 FROM exercise_route_points WHERE sessionId = :sessionId LIMIT 1")
     suspend fun hasRoute(sessionId: String): Boolean
+
+    @Query("SELECT * FROM exercise_route_points")
+    suspend fun getAll(): List<ExerciseRoutePointEntity>
 }

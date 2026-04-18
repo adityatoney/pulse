@@ -1,5 +1,8 @@
 package com.pulse.feature.you.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -25,20 +28,31 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DirectionsRun
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.LocalFireDepartment
+import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Straighten
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -49,6 +63,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +75,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -67,6 +83,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.flowWithLifecycle
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.LinkOff
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Watch
+import kotlinx.coroutines.launch
+import com.pulse.data.cloud.DriveAuthOutcome
 import com.pulse.core.designsystem.theme.Coral500
 import com.pulse.core.designsystem.theme.Forest300
 import com.pulse.core.designsystem.theme.Forest500
@@ -97,12 +119,51 @@ fun YouRoute(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    // Launcher for Drive consent UI
+    val consentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val activity = context as? android.app.Activity ?: return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val tokenResult = viewModel.driveAuthManager.handleConsentResult(activity, result.data)
+            viewModel.onSignInResult(
+                success = tokenResult.isSuccess,
+                message = tokenResult.exceptionOrNull()?.message,
+            )
+        }
+    }
+
     LaunchedEffect(viewModel) {
         viewModel.effects
             .flowWithLifecycle(lifecycleOwner.lifecycle, Lifecycle.State.STARTED)
             .collect { effect ->
                 when (effect) {
                     YouEffect.NavigateBack -> onBack()
+                    YouEffect.LaunchFitbitSignIn -> {
+                        val intent = viewModel.fitbitAuthManager.buildAuthIntent()
+                        context.startActivity(intent)
+                    }
+                    YouEffect.LaunchDriveSignIn -> {
+                        val activity = context as? android.app.Activity ?: return@collect
+                        coroutineScope.launch {
+                            try {
+                                when (val outcome = viewModel.driveAuthManager.requestAuth(activity)) {
+                                    is DriveAuthOutcome.Authorized -> {
+                                        viewModel.onSignInResult(success = true, message = null)
+                                    }
+                                    is DriveAuthOutcome.ConsentRequired -> {
+                                        val intentSenderRequest = IntentSenderRequest.Builder(outcome.pendingIntent).build()
+                                        consentLauncher.launch(intentSenderRequest)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                viewModel.onSignInResult(success = false, message = e.message)
+                            }
+                        }
+                    }
                 }
             }
     }
@@ -142,6 +203,11 @@ fun YouScreen(
             item { GoalsCard(state, onIntent) }
             item { HeartZoneVisual(state) }
             item { BodyStatsRow(state) }
+            item { DataProvidersCard(state, onIntent) }
+            item { DisplayPrefsCard(state, onIntent) }
+            if (state.backupEnabled) {
+                item { CloudBackupCard(state, onIntent) }
+            }
         }
     }
 
@@ -519,6 +585,390 @@ private fun GoalEditorSheet(
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = Color.White,
                     )
+                }
+            }
+        }
+    }
+}
+
+// ── Data Providers Card ──────────────────────────────────────────────────────
+
+@Composable
+private fun DataProvidersCard(state: YouState, onIntent: (YouIntent) -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Watch,
+                    contentDescription = null,
+                    tint = Forest500,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Data Providers",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Connect data sources for richer health history",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Fitbit provider
+            ProviderRow(
+                name = "Fitbit",
+                description = if (state.fitbitConnected) {
+                    state.fitbitSyncCursor?.let { "Synced to $it" } ?: "Connected"
+                } else {
+                    "Unlimited historical data"
+                },
+                connected = state.fitbitConnected,
+                onConnect = { onIntent(YouIntent.FitbitSignIn) },
+                onDisconnect = { onIntent(YouIntent.FitbitSignOut) },
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            // Health Connect is always available
+            ProviderRow(
+                name = "Health Connect",
+                description = "On-device, last ~30 days",
+                connected = true,
+                alwaysConnected = true,
+                onConnect = {},
+                onDisconnect = {},
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProviderRow(
+    name: String,
+    description: String,
+    connected: Boolean,
+    alwaysConnected: Boolean = false,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = if (connected) Forest500.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.size(40.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    if (connected) Icons.Outlined.Link else Icons.Outlined.LinkOff,
+                    contentDescription = null,
+                    tint = if (connected) Forest500 else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (!alwaysConnected) {
+            if (connected) {
+                TextButton(onClick = onDisconnect) {
+                    Text(
+                        "Disconnect",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                Button(
+                    onClick = onConnect,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Forest500),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    Text("Connect", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+// ── Display Preferences Card ─────────────────────────────────────────────────
+
+@Composable
+private fun DisplayPrefsCard(state: YouState, onIntent: (YouIntent) -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = null,
+                    tint = Forest500,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Dashboard Metrics",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Choose how distance and calories are calculated",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            PrefToggleRow(
+                label = "Distance",
+                description = if (state.activityOnlyDistance) "Activity miles only" else "Total miles (all movement)",
+                checked = state.activityOnlyDistance,
+                onCheckedChange = { onIntent(YouIntent.SetActivityOnlyDistance(it)) },
+            )
+            PrefToggleRow(
+                label = "Calories",
+                description = if (state.activityOnlyCalories) "Activity calories only" else "All active calories",
+                checked = state.activityOnlyCalories,
+                onCheckedChange = { onIntent(YouIntent.SetActivityOnlyCalories(it)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PrefToggleRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = Forest500),
+        )
+    }
+}
+
+// ── Cloud Backup Card ────────────────────────────────────────────────────────
+
+@Composable
+private fun CloudBackupCard(state: YouState, onIntent: (YouIntent) -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (state.driveSignedIn) Icons.Outlined.CloudDone else Icons.Outlined.CloudOff,
+                    contentDescription = null,
+                    tint = if (state.driveSignedIn) Forest500 else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Google Drive Backup",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                )
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (state.driveSignedIn) "Your data is backed up to Google Drive"
+                else "Sign in to back up your health data",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            if (!state.driveSignedIn) {
+                Button(
+                    onClick = { onIntent(YouIntent.DriveSignIn) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Forest500),
+                ) {
+                    Text("Sign in with Google")
+                }
+            } else {
+                // Last backup info
+                if (state.lastBackupTime != null) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Last backup",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            state.lastBackupTime,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        )
+                    }
+                }
+                if (state.lastBackupSize != null) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Size",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            state.lastBackupSize,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Action buttons
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { onIntent(YouIntent.RestoreNow) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                        enabled = !state.backupInProgress && !state.restoreInProgress,
+                    ) {
+                        if (state.restoreInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Outlined.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text("Restore")
+                    }
+
+                    Button(
+                        onClick = { onIntent(YouIntent.BackupNow) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Forest500),
+                        enabled = !state.backupInProgress && !state.restoreInProgress,
+                    ) {
+                        if (state.backupInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White,
+                            )
+                        } else {
+                            Icon(Icons.Outlined.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text("Back up")
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                TextButton(
+                    onClick = { onIntent(YouIntent.DriveSignOut) },
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                ) {
+                    Text(
+                        "Sign out",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // Status message
+            if (state.backupMessage != null) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            state.backupMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { onIntent(YouIntent.DismissBackupMessage) }) {
+                            Text("OK", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
                 }
             }
         }

@@ -12,5 +12,16 @@ CONVEX_URL=http://10.0.2.2:10710
 # Optional: Convex admin/auth token for dev (leave blank for anonymous).
 CONVEX_AUTH_TOKEN=
 
-# Optional: Google OAuth client ID for Credential Manager / Google Sign-In (web client ID).
-GOOGLE_WEB_CLIENT_ID=
+# Google Health API OAuth credentials (from GCP Console)
+GOOGLE_HEALTH_WEB_CLIENT_ID=
+GOOGLE_HEALTH_WEB_CLIENT_SECRET=
+GOOGLE_HEALTH_ANDROID_CLIENT_ID=
+
+# Google Maps API key (get from https://console.cloud.google.com/apis/credentials)
+MAPS_API_KEY=
+
+# Fitbit Web API (register at https://dev.fitbit.com/apps).
+# Redirect URI must be set to: pulse://fitbit/callback
+# OAuth 2.0 Application Type: Server
+FITBIT_CLIENT_ID=
+FITBIT_CLIENT_SECRET=

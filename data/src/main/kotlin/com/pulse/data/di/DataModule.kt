@@ -21,11 +21,13 @@ import com.pulse.data.local.dao.SleepSessionDao
 import com.pulse.data.local.dao.SyncStateDao
 import com.pulse.data.proto.FeatureFlags
 import com.pulse.data.proto.Preferences
+import com.pulse.data.repository.BackupRepositoryImpl
 import com.pulse.data.repository.DebugRepositoryImpl
 import com.pulse.data.repository.DeviceStatusRepositoryImpl
 import com.pulse.data.repository.GoalsRepositoryImpl
 import com.pulse.data.repository.HealthRepositoryImpl
 import com.pulse.data.repository.SyncRepositoryImpl
+import com.pulse.domain.repository.BackupRepository
 import com.pulse.domain.repository.DebugRepository
 import com.pulse.domain.repository.DeviceStatusRepository
 import com.pulse.domain.repository.GoalsRepository
@@ -35,6 +37,7 @@ import com.pulse.domain.util.Clock
 import com.pulse.domain.util.SystemClock
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
@@ -100,6 +103,7 @@ object DataProvidersModule {
     @Provides
     @Singleton
     fun httpClient(): HttpClient = HttpClient(OkHttp) {
+        install(HttpTimeout)
         install(ContentNegotiation) {
             json(kotlinx.serialization.json.Json {
                 ignoreUnknownKeys = true
@@ -138,4 +142,5 @@ abstract class DataBindsModule {
     @Binds @Singleton abstract fun goalsRepository(impl: GoalsRepositoryImpl): GoalsRepository
     @Binds @Singleton abstract fun deviceStatusRepository(impl: DeviceStatusRepositoryImpl): DeviceStatusRepository
     @Binds @Singleton abstract fun debugRepository(impl: DebugRepositoryImpl): DebugRepository
+    @Binds @Singleton abstract fun backupRepository(impl: BackupRepositoryImpl): BackupRepository
 }

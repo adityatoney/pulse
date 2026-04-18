@@ -23,6 +23,8 @@ import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.changes.DeletionChange
+import androidx.health.connect.client.changes.UpsertionChange
 import androidx.health.connect.client.request.ChangesTokenRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
@@ -32,6 +34,7 @@ import java.time.Period as JavaPeriod
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.reflect.KClass
 
 /**
  * Wraps every call into [HealthConnectClient]. The ONLY class that imports
@@ -260,6 +263,124 @@ class HealthConnectDataSource @Inject constructor(
                 )
             )
         )
+    }
+
+    // --- Changes API for incremental sync ------------------------------------
+
+    sealed interface ChangesResult {
+        data class Success(
+            val upsertedRecordTypes: Set<KClass<out androidx.health.connect.client.records.Record>>,
+            val deletionCount: Int,
+            val nextToken: String,
+        ) : ChangesResult
+        data object TokenExpired : ChangesResult
+    }
+
+    suspend fun getChanges(token: String): ChangesResult {
+        val c = client ?: return ChangesResult.TokenExpired
+        val upsertedTypes = mutableSetOf<KClass<out androidx.health.connect.client.records.Record>>()
+        var deletions = 0
+        var currentToken = token
+        do {
+            val response = c.getChanges(currentToken)
+            if (response.changesTokenExpired) return ChangesResult.TokenExpired
+            for (change in response.changes) {
+                when (change) {
+                    is UpsertionChange -> upsertedTypes.add(change.record::class)
+                    is DeletionChange -> deletions++
+                }
+            }
+            currentToken = response.nextChangesToken
+        } while (response.hasMore)
+        return ChangesResult.Success(
+            upsertedRecordTypes = upsertedTypes,
+            deletionCount = deletions,
+            nextToken = currentToken,
+        )
+    }
+
+    // --- Bulk range reads (type-first sync) --------------------------------
+
+    suspend fun readWeightRange(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Double> {
+        val c = client ?: return emptyMap()
+        val range = TimeRangeFilter.between(start, end)
+        val records = c.readRecords(ReadRecordsRequest(WeightRecord::class, range)).records
+        return records.groupBy { it.time.atZone(zone).toLocalDate() }
+            .mapValues { (_, recs) -> recs.last().weight.inKilograms }
+    }
+
+    suspend fun readBodyFatRange(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Double> {
+        val c = client ?: return emptyMap()
+        val range = TimeRangeFilter.between(start, end)
+        val records = c.readRecords(ReadRecordsRequest(BodyFatRecord::class, range)).records
+        return records.groupBy { it.time.atZone(zone).toLocalDate() }
+            .mapValues { (_, recs) -> recs.last().percentage.value }
+    }
+
+    suspend fun readSpO2Range(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Double> {
+        val c = client ?: return emptyMap()
+        val range = TimeRangeFilter.between(start, end)
+        val records = c.readRecords(ReadRecordsRequest(OxygenSaturationRecord::class, range)).records
+        return records.groupBy { it.time.atZone(zone).toLocalDate() }
+            .mapValues { (_, recs) -> recs.last().percentage.value }
+    }
+
+    suspend fun readHrvRange(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Double> {
+        val c = client ?: return emptyMap()
+        val range = TimeRangeFilter.between(start, end)
+        val records = c.readRecords(ReadRecordsRequest(HeartRateVariabilityRmssdRecord::class, range)).records
+        return records.groupBy { it.time.atZone(zone).toLocalDate() }
+            .mapValues { (_, recs) -> recs.last().heartRateVariabilityMillis }
+    }
+
+    suspend fun readVo2MaxRange(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Double> {
+        val c = client ?: return emptyMap()
+        val range = TimeRangeFilter.between(start, end)
+        val records = c.readRecords(ReadRecordsRequest(Vo2MaxRecord::class, range)).records
+        return records.groupBy { it.time.atZone(zone).toLocalDate() }
+            .mapValues { (_, recs) -> recs.last().vo2MillilitersPerMinuteKilogram }
+    }
+
+    suspend fun readSkinTemperatureRange(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Double> {
+        val c = client ?: return emptyMap()
+        val range = TimeRangeFilter.between(start, end)
+        val records = c.readRecords(ReadRecordsRequest(SkinTemperatureRecord::class, range)).records
+        return records.groupBy { it.startTime.atZone(zone).toLocalDate() }
+            .mapValues { (_, recs) -> recs.last().baseline?.inCelsius ?: 0.0 }
+    }
+
+    suspend fun readRestingHeartRateRange(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Int> {
+        val c = client ?: return emptyMap()
+        val range = TimeRangeFilter.between(start, end)
+        val records = c.readRecords(ReadRecordsRequest(RestingHeartRateRecord::class, range)).records
+        return records.groupBy { it.time.atZone(zone).toLocalDate() }
+            .mapValues { (_, recs) -> recs.last().beatsPerMinute.toInt() }
+    }
+
+    /** Paginated read of all HR samples in a range (uses pageToken for >1000 records). */
+    suspend fun readHeartRateSamplesRange(start: JavaInstant, end: JavaInstant): List<Pair<JavaInstant, Int>> {
+        val c = client ?: return emptyList()
+        val range = TimeRangeFilter.between(start, end)
+        val all = mutableListOf<Pair<JavaInstant, Int>>()
+        var request = ReadRecordsRequest(HeartRateRecord::class, range)
+        do {
+            val response = c.readRecords(request)
+            response.records.flatMapTo(all) { r ->
+                r.samples.map { it.time to it.beatsPerMinute.toInt() }
+            }
+            val pageToken = response.pageToken
+            if (pageToken != null) {
+                request = ReadRecordsRequest(HeartRateRecord::class, range, pageToken = pageToken)
+            }
+        } while (pageToken != null)
+        return all
+    }
+
+    /** Bulk read all sleep sessions in a range (single API call). */
+    suspend fun readSleepRange(start: JavaInstant, end: JavaInstant): List<SleepSessionRecord> {
+        val c = client ?: return emptyList()
+        val range = TimeRangeFilter.between(start, end)
+        return c.readRecords(ReadRecordsRequest(SleepSessionRecord::class, range)).records
     }
 
     // --- Body & vitals (used by expanded dashboard) --------------------------

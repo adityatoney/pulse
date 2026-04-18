@@ -30,6 +30,16 @@ android {
             "GOOGLE_HEALTH_ANDROID_CLIENT_ID",
             "\"" + (localProps.getProperty("GOOGLE_HEALTH_ANDROID_CLIENT_ID") ?: "") + "\""
         )
+        buildConfigField(
+            "String",
+            "FITBIT_CLIENT_ID",
+            "\"" + (localProps.getProperty("FITBIT_CLIENT_ID") ?: "") + "\""
+        )
+        buildConfigField(
+            "String",
+            "FITBIT_CLIENT_SECRET",
+            "\"" + (localProps.getProperty("FITBIT_CLIENT_SECRET") ?: "") + "\""
+        )
     }
 
     testOptions.unitTests.isIncludeAndroidResources = true
@@ -97,6 +107,10 @@ dependencies {
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.google.identity.googleid)
+
+    // Google Identity Services (AuthorizationClient for Drive scopes)
+    implementation(libs.play.services.auth)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.androidx.work.testing)

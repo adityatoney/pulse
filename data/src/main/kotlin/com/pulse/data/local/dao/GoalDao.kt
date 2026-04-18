@@ -16,4 +16,7 @@ interface GoalDao {
 
     @Query("SELECT * FROM goals WHERE metric = :metric")
     suspend fun get(metric: String): GoalEntity?
+
+    @Query("SELECT * FROM goals")
+    suspend fun getAll(): List<GoalEntity>
 }

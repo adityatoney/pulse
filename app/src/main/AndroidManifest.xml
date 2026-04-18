@@ -36,6 +36,14 @@
                 <data android:scheme="pulse" android:host="debug" />
             </intent-filter>
 
+            <!-- Fitbit OAuth redirect callback. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pulse" android:host="fitbit" android:path="/callback" />
+            </intent-filter>
+
             <!-- Health Connect rationale activity target. -->
             <intent-filter>
                 <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
