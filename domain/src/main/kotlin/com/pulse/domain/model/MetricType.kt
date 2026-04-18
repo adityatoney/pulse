@@ -19,4 +19,11 @@ enum class MetricType {
     SkinTemperature,
     HRV,
     VO2Max,
+
+    /** @deprecated No longer used — Distance summary now handles activity-only via compute engine. */
+    @Deprecated("Use Distance with activityOnlyDistance preference instead")
+    ExerciseDistance,
+    /** @deprecated No longer used — ActiveCalories summary now handles activity-only via compute engine. */
+    @Deprecated("Use ActiveCalories with activityOnlyCalories preference instead")
+    ExerciseCalories,
 }

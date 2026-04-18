@@ -238,6 +238,17 @@ class DebugMenuViewModel @Inject constructor(
                     refreshDataStats()
                 }
             }
+            DebugMenuIntent.ExportBackup -> viewModelScope.launch {
+                _state.update { it.copy(inFlight = true, lastAction = "Exporting backup...") }
+                runCatching {
+                    debug.exportDriveBackup()
+                }.onSuccess { path ->
+                    _state.update { it.copy(inFlight = false, lastAction = "Backup exported to: $path") }
+                    _effects.trySend(DebugMenuEffect.ShareCsv(path))
+                }.onFailure { e ->
+                    _state.update { it.copy(inFlight = false, lastAction = "Export failed: ${e.message}") }
+                }
+            }
             DebugMenuIntent.Dismiss -> _effects.trySend(DebugMenuEffect.NavigateBack)
         }
     }

@@ -5,11 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.pulse.data.cloud.DriveAuthManager
 import com.pulse.data.cloud.fitbit.FitbitAuthManager
 import com.pulse.data.cloud.fitbit.FitbitSyncManager
+import com.pulse.data.compute.SummaryComputeEngine
 import com.pulse.data.datastore.FeatureFlagRepository
 import com.pulse.data.datastore.PreferencesRepository
 import com.pulse.domain.model.Cadence
 import com.pulse.domain.model.Goal
-import com.pulse.domain.model.DateRange
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.repository.BackupRepository
 import com.pulse.domain.repository.GoalsRepository
@@ -41,6 +41,7 @@ class YouViewModel @Inject constructor(
     val driveAuthManager: DriveAuthManager,
     val fitbitAuthManager: FitbitAuthManager,
     private val fitbitSyncManager: FitbitSyncManager,
+    private val computeEngine: SummaryComputeEngine,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -185,13 +186,13 @@ class YouViewModel @Inject constructor(
             is YouIntent.SetActivityOnlyDistance -> {
                 viewModelScope.launch {
                     prefsRepo.setActivityOnlyDistance(intent.enabled)
-                    triggerResync()
+                    computeEngine.recomputeAll()
                 }
             }
             is YouIntent.SetActivityOnlyCalories -> {
                 viewModelScope.launch {
                     prefsRepo.setActivityOnlyCalories(intent.enabled)
-                    triggerResync()
+                    computeEngine.recomputeAll()
                 }
             }
         }
@@ -238,14 +239,6 @@ class YouViewModel @Inject constructor(
                 }
             }
         }
-    }
-
-    private suspend fun triggerResync() {
-        val today = clock.today()
-        val jToday = java.time.LocalDate.of(today.year, today.monthNumber, today.dayOfMonth)
-        val jStart = jToday.minusDays(30)
-        val start = kotlinx.datetime.LocalDate(jStart.year, jStart.monthValue, jStart.dayOfMonth)
-        healthRepo.refreshFromHealthConnect(DateRange(start, today))
     }
 
     private fun observeDisplayPrefs() {

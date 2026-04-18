@@ -62,7 +62,7 @@ class MetricDetailViewModel @Inject constructor(
         when (intent) {
             MetricDetailIntent.Load -> rewire()
             is MetricDetailIntent.ChangeTimeframe -> {
-                _state.update { it.copy(timeframe = intent.tf) }
+                _state.update { it.copy(timeframe = intent.tf, selectedBarIndex = null) }
                 rewire()
             }
             is MetricDetailIntent.MovePeriod -> {
@@ -78,7 +78,7 @@ class MetricDetailViewModel @Inject constructor(
                 val raw = if (intent.forward) _state.value.periodAnchor.plus(step)
                 else _state.value.periodAnchor.minus(step)
                 val newAnchor = if (raw > today) today else raw
-                _state.update { it.copy(periodAnchor = newAnchor) }
+                _state.update { it.copy(periodAnchor = newAnchor, selectedBarIndex = null) }
                 rewire()
             }
             is MetricDetailIntent.DrillIntoMonth -> {
@@ -89,6 +89,10 @@ class MetricDetailViewModel @Inject constructor(
                     )
                 }
                 rewire()
+            }
+            is MetricDetailIntent.SelectBar -> {
+                val current = _state.value.selectedBarIndex
+                _state.update { it.copy(selectedBarIndex = if (current == intent.index) null else intent.index) }
             }
             MetricDetailIntent.Back -> _effects.trySend(MetricDetailEffect.NavigateBack)
         }
@@ -130,7 +134,7 @@ class MetricDetailViewModel @Inject constructor(
             val avg = if (points.isNotEmpty()) total / points.size else 0.0
             val goalHits = points.count { p -> p.goal?.let { g -> p.value >= g } == true }
             val goal = points.firstOrNull()?.goal
-            val comparisons = buildComparisons(comparisonAnchors, compSeries, s.metric, s.timeframe)
+            val comparisons = buildComparisons(comparisonAnchors, compSeries, s.metric, s.timeframe, series)
             _state.update {
                 it.copy(
                     series = series,
@@ -187,21 +191,24 @@ class MetricDetailViewModel @Inject constructor(
         seriesList: List<com.pulse.domain.model.MetricSeries>,
         metric: MetricType,
         tf: Timeframe,
+        chartSeries: com.pulse.domain.model.MetricSeries,
     ): List<PeriodComparison> {
         val today = clock.today()
         return when (tf) {
             Timeframe.Week -> {
-                // Daily breakdown: each anchor is a day (Mon-Sun)
-                anchors.zip(seriesList).map { (dayDate, series) ->
+                // Use chart series points directly (from daily aggregates) — avoids
+                // the mismatch where Day-timeframe comparison flows use exercise-only data.
+                val zone = kotlinx.datetime.TimeZone.currentSystemDefault()
+                val chartPoints = chartSeries.points
+                anchors.mapIndexed { i, dayDate ->
                     val dayName = dayDate.dayOfWeek.name.take(3).lowercase()
                         .replaceFirstChar { it.uppercase() }
                     val mon = dayDate.month.name.take(3).lowercase()
                         .replaceFirstChar { it.uppercase() }
                     val label = if (dayDate == today) "Today"
                     else "$dayName, $mon ${dayDate.dayOfMonth}"
-                    val pts = series.points
-                    val total = pts.sumOf { it.value }
-                    PeriodComparison(label = label, value = formatValue(total, metric))
+                    val value = chartPoints.getOrNull(i)?.value ?: 0.0
+                    PeriodComparison(label = label, value = formatValue(value, metric))
                 }
             }
             Timeframe.Month -> {
@@ -259,7 +266,7 @@ class MetricDetailViewModel @Inject constructor(
 
     private fun formatValue(v: Double, metric: MetricType): String = when (metric) {
         MetricType.Steps, MetricType.Calories, MetricType.ActiveCalories, MetricType.ZoneMinutes ->
-            v.toInt().toString()
+            "%,d".format(v.toInt())
         MetricType.Distance -> "%.2f".format(v)
         else -> "%.1f".format(v)
     }

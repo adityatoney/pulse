@@ -30,6 +30,9 @@ interface HealthRepository {
     /** Pull fresh readings from Health Connect and write them to the local cache. */
     suspend fun refreshFromHealthConnect(range: DateRange): Result<Unit>
 
+    /** Recompute aggregates from existing DB data (no HC fetch). */
+    suspend fun recomputeAggregates(days: Int = 30)
+
     /** Pull reconciled data from the Google Health REST API (yesterday+ only). */
     suspend fun refreshFromCloudApi(range: DateRange): Result<Unit>
 

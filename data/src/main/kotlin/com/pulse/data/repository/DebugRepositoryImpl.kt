@@ -1,10 +1,12 @@
 package com.pulse.data.repository
 
 import android.content.Context
+import com.pulse.data.compute.SummaryComputeEngine
 import com.pulse.data.datastore.FeatureFlagRepository
 import com.pulse.data.local.PulseDatabase
-import com.pulse.data.local.entity.DailyAggregateEntity
+import com.pulse.data.local.entity.ComputeQueueEntity
 import com.pulse.data.local.entity.ExerciseSessionEntity
+import com.pulse.data.local.entity.RawDailyMetricEntity
 import com.pulse.data.local.entity.SleepSessionEntity
 import com.pulse.data.local.entity.SyncStateEntity
 import com.pulse.domain.model.DataSource
@@ -36,6 +38,7 @@ class DebugRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val db: PulseDatabase,
     private val syncRepository: SyncRepositoryImpl,
+    private val computeEngine: SummaryComputeEngine,
     private val featureFlags: FeatureFlagRepository,
     private val clock: Clock,
 ) : DebugRepository {
@@ -44,11 +47,13 @@ class DebugRepositoryImpl @Inject constructor(
         val rng = Random(seed)
         val tz = TimeZone.currentSystemDefault()
         val today = clock.now().toLocalDateTime(tz).date
-        val rows = mutableListOf<DailyAggregateEntity>()
+        val rawRows = mutableListOf<RawDailyMetricEntity>()
+        val dirtyEntries = mutableListOf<ComputeQueueEntity>()
         val nowMs = clock.now().toEpochMilliseconds()
 
         for (i in 0 until days) {
             val date = today.minus(DatePeriod(days = i))
+            val dateStr = date.toString()
             val dow = date.dayOfWeek.ordinal // Mon=0
             val baseSteps = when (dow) {
                 5, 6 -> rng.nextInt(2_000, 6_000)   // weekend shorter
@@ -62,44 +67,22 @@ class DebugRepositoryImpl @Inject constructor(
                 steps > 7_000 -> rng.nextInt(15, 35)
                 else -> rng.nextInt(0, 15)
             }
-            rows += DailyAggregateEntity(
-                date = date.toString(),
-                metric = MetricType.Steps.name,
-                total = steps.toDouble(),
-                goal = 10_000.0,
-                sampleCount = 1,
-                computedAtMs = nowMs,
-                dirty = true,
-            )
-            rows += DailyAggregateEntity(
-                date = date.toString(),
-                metric = MetricType.Distance.name,
-                total = distanceMi,
-                goal = 5.0,
-                sampleCount = 1,
-                computedAtMs = nowMs,
-                dirty = true,
-            )
-            rows += DailyAggregateEntity(
-                date = date.toString(),
-                metric = MetricType.ActiveCalories.name,
-                total = kcal.toDouble(),
-                goal = 2_500.0,
-                sampleCount = 1,
-                computedAtMs = nowMs,
-                dirty = true,
-            )
-            rows += DailyAggregateEntity(
-                date = date.toString(),
-                metric = MetricType.ZoneMinutes.name,
-                total = zMin.toDouble(),
-                goal = 22.0,
-                sampleCount = 1,
-                computedAtMs = nowMs,
-                dirty = true,
-            )
+
+            fun addRaw(metric: MetricType, value: Double, unit: String) {
+                rawRows += RawDailyMetricEntity(
+                    date = dateStr, metric = metric.name, source = "Seeded",
+                    value = value, unit = unit,
+                    externalId = "seed-${metric.name.lowercase()}-$dateStr",
+                    ingestedAtMs = nowMs,
+                )
+                dirtyEntries += ComputeQueueEntity(date = dateStr, metric = metric.name, enqueuedAtMs = nowMs)
+            }
+
+            addRaw(MetricType.Steps, steps.toDouble(), "count")
+            addRaw(MetricType.Distance, distanceMi, "miles")
+            addRaw(MetricType.ActiveCalories, kcal.toDouble(), "kcal")
+            addRaw(MetricType.ZoneMinutes, zMin.toDouble(), "minutes")
         }
-        db.dailyAggregateDao().upsert(rows)
 
         // Seed exercise sessions
         val exerciseTypes = listOf("Running", "Walking", "Cycling", "Treadmill run", "Outdoor walk")
@@ -136,43 +119,36 @@ class DebugRepositoryImpl @Inject constructor(
             db.exerciseSessionDao().upsert(exerciseRows)
         }
 
-        // Seed body metrics (Weight, BodyFat, SpO2, HRV, RestingHeartRate, VO2Max, SkinTemperature)
-        val bodyRows = mutableListOf<DailyAggregateEntity>()
-        val baseWeight = 72.0 + rng.nextDouble(-5.0, 5.0)
+        // Seed body metrics (weight in lbs)
+        val baseWeight = 159.0 + rng.nextDouble(-11.0, 11.0)
         for (i in 0 until days) {
             val date = today.minus(DatePeriod(days = i))
-            bodyRows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.RestingHeartRate.name,
-                total = rng.nextInt(58, 72).toDouble(), goal = 0.0,
-                sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
-            bodyRows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.Weight.name,
-                total = baseWeight + rng.nextDouble(-0.5, 0.5),
-                goal = 70.0, sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
-            bodyRows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.BodyFat.name,
-                total = 18.0 + rng.nextDouble(-2.0, 2.0),
-                goal = 0.0, sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
-            bodyRows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.SpO2.name,
-                total = rng.nextInt(95, 100).toDouble(), goal = 0.0,
-                sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
-            bodyRows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.HRV.name,
-                total = rng.nextInt(25, 65).toDouble(), goal = 0.0,
-                sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
-            bodyRows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.VO2Max.name,
-                total = 38.0 + rng.nextDouble(-3.0, 3.0),
-                goal = 0.0, sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            val dateStr = date.toString()
+
+            fun addBody(metric: MetricType, value: Double, unit: String) {
+                rawRows += RawDailyMetricEntity(
+                    date = dateStr, metric = metric.name, source = "Seeded",
+                    value = value, unit = unit,
+                    externalId = "seed-${metric.name.lowercase()}-$dateStr",
+                    ingestedAtMs = nowMs,
+                )
+                dirtyEntries += ComputeQueueEntity(date = dateStr, metric = metric.name, enqueuedAtMs = nowMs)
+            }
+
+            addBody(MetricType.RestingHeartRate, rng.nextInt(58, 72).toDouble(), "bpm")
+            addBody(MetricType.Weight, baseWeight + rng.nextDouble(-1.0, 1.0), "lbs")
+            addBody(MetricType.BodyFat, 18.0 + rng.nextDouble(-2.0, 2.0), "percent")
+            addBody(MetricType.SpO2, rng.nextInt(95, 100).toDouble(), "percent")
+            addBody(MetricType.HRV, rng.nextInt(25, 65).toDouble(), "ms")
+            addBody(MetricType.VO2Max, 38.0 + rng.nextDouble(-3.0, 3.0), "ml/kg/min")
         }
-        db.dailyAggregateDao().upsert(bodyRows)
+
+        // Write raw data and trigger compute
+        if (rawRows.isNotEmpty()) {
+            db.rawDailyMetricDao().insertAll(rawRows)
+            db.computeQueueDao().enqueue(dirtyEntries)
+            computeEngine.processQueue(dirtyEntries.size)
+        }
 
         // Seed sleep sessions
         val sleepRows = mutableListOf<SleepSessionEntity>()
@@ -201,48 +177,45 @@ class DebugRepositoryImpl @Inject constructor(
         }
         db.sleepSessionDao().upsert(sleepRows)
 
-        return rows.size + exerciseRows.size + bodyRows.size + sleepRows.size
+        return rawRows.size + exerciseRows.size + sleepRows.size
     }
 
     override suspend fun seedRealisticWeek(): Int {
         val tz = TimeZone.currentSystemDefault()
         val today = clock.now().toLocalDateTime(tz).date
         val nowMs = clock.now().toEpochMilliseconds()
-        // Fixtures chosen to match the attached Google Fit week-view screenshot:
-        // avg ~1.78 mi/day, Wed spikes highest, Sat/Sun no data.
         val stepsByOffset = listOf(3_500, 2_800, 5_200, 4_100, 1_900, 0, 0)
-        val rows = mutableListOf<DailyAggregateEntity>()
+        val rawRows = mutableListOf<RawDailyMetricEntity>()
+        val dirtyEntries = mutableListOf<ComputeQueueEntity>()
         stepsByOffset.forEachIndexed { idx, steps ->
             val d = today.minus(DatePeriod(days = idx))
-            rows += DailyAggregateEntity(
-                date = d.toString(),
-                metric = MetricType.Steps.name,
-                total = steps.toDouble(),
-                goal = 10_000.0,
-                sampleCount = 1,
-                computedAtMs = nowMs,
+            val dateStr = d.toString()
+            rawRows += RawDailyMetricEntity(
+                date = dateStr, metric = MetricType.Steps.name, source = "Seeded",
+                value = steps.toDouble(), unit = "count",
+                externalId = "seed-steps-$dateStr", ingestedAtMs = nowMs,
             )
-            rows += DailyAggregateEntity(
-                date = d.toString(),
-                metric = MetricType.Distance.name,
-                total = steps / 2000.0,
-                goal = 5.0,
-                sampleCount = 1,
-                computedAtMs = nowMs,
+            rawRows += RawDailyMetricEntity(
+                date = dateStr, metric = MetricType.Distance.name, source = "Seeded",
+                value = steps / 2000.0, unit = "miles",
+                externalId = "seed-distance-$dateStr", ingestedAtMs = nowMs,
             )
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.Steps.name, enqueuedAtMs = nowMs)
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.Distance.name, enqueuedAtMs = nowMs)
         }
-        db.dailyAggregateDao().upsert(rows)
+        db.rawDailyMetricDao().insertAll(rawRows)
+        db.computeQueueDao().enqueue(dirtyEntries)
+        computeEngine.processQueue(dirtyEntries.size)
 
-        // Seed realistic exercise sessions (matching screenshot pattern)
+        // Seed realistic exercise sessions
         val exerciseRows = mutableListOf<ExerciseSessionEntity>()
-        // Wed (offset 2): Treadmill run
         val wed = today.minus(DatePeriod(days = 2))
-        val wedStartMs = wed.atStartMs() + 7 * 3_600_000L // 7 AM
+        val wedStartMs = wed.atStartMs() + 7 * 3_600_000L
         exerciseRows += ExerciseSessionEntity(
             id = "realistic-$wed-0",
             type = "Treadmill run",
             startUtcMs = wedStartMs,
-            endUtcMs = wedStartMs + 35 * 60_000L, // 35 min
+            endUtcMs = wedStartMs + 35 * 60_000L,
             distanceMeters = 5200.0,
             calories = 320.0,
             avgHr = 145,
@@ -250,14 +223,13 @@ class DebugRepositoryImpl @Inject constructor(
             sourceJson = null,
             dirty = true,
         )
-        // Thu (offset 3): Outdoor walk
         val thu = today.minus(DatePeriod(days = 3))
-        val thuStartMs = thu.atStartMs() + 8 * 3_600_000L // 8 AM
+        val thuStartMs = thu.atStartMs() + 8 * 3_600_000L
         exerciseRows += ExerciseSessionEntity(
             id = "realistic-$thu-0",
             type = "Outdoor walk",
             startUtcMs = thuStartMs,
-            endUtcMs = thuStartMs + 45 * 60_000L, // 45 min
+            endUtcMs = thuStartMs + 45 * 60_000L,
             distanceMeters = 3800.0,
             calories = 180.0,
             avgHr = 115,
@@ -265,13 +237,12 @@ class DebugRepositoryImpl @Inject constructor(
             sourceJson = null,
             dirty = true,
         )
-        // Today (offset 0): Running
-        val todayStartMs = today.atStartMs() + 6 * 3_600_000L + 30 * 60_000L // 6:30 AM
+        val todayStartMs = today.atStartMs() + 6 * 3_600_000L + 30 * 60_000L
         exerciseRows += ExerciseSessionEntity(
             id = "realistic-$today-0",
             type = "Running",
             startUtcMs = todayStartMs,
-            endUtcMs = todayStartMs + 28 * 60_000L, // 28 min
+            endUtcMs = todayStartMs + 28 * 60_000L,
             distanceMeters = 4500.0,
             calories = 290.0,
             avgHr = 152,
@@ -281,14 +252,16 @@ class DebugRepositoryImpl @Inject constructor(
         )
         db.exerciseSessionDao().upsert(exerciseRows)
 
-        return rows.size + exerciseRows.size
+        return rawRows.size + exerciseRows.size
     }
 
     override suspend fun clearLocalCache(hard: Boolean) {
-        db.dailyAggregateDao().clear()
+        db.rawDailyMetricDao().clear()
+        db.rawSampleDao().clear()
+        db.summaryDailyMetricDao().clear()
+        db.computeQueueDao().clear()
         db.exerciseSessionDao().clear()
         db.sleepSessionDao().clear()
-        db.healthSampleDao().clear()
         if (hard) {
             db.syncStateDao().clear()
         }
@@ -299,25 +272,32 @@ class DebugRepositoryImpl @Inject constructor(
         val file = File(dir, "export_${clock.now().toEpochMilliseconds()}.csv")
         FileWriter(file).use { w ->
             w.appendLine("date,metric,total,goal,sampleCount,computedAtMs")
-            // Real impl iterates the DB; we emit a header for now.
         }
         return file.absolutePath
     }
 
     override suspend fun dumpRecords(date: LocalDate): List<HealthMetric> {
-        val startMs = date.atStartMs()
-        val endMs = startMs + 24 * 60 * 60 * 1000L
-        return db.healthSampleDao().dump(startMs, endMs).map {
-            HealthMetric(
-                id = it.id,
-                type = runCatching { MetricType.valueOf(it.type) }.getOrDefault(MetricType.Steps),
-                value = it.value,
-                unit = MeasurementUnit.Count,
-                start = kotlinx.datetime.Instant.fromEpochMilliseconds(it.startUtcMs),
-                end = kotlinx.datetime.Instant.fromEpochMilliseconds(it.endUtcMs),
-                source = DataSource.HealthConnect,
-            )
+        val dateStr = date.toString()
+        val allRaw = mutableListOf<HealthMetric>()
+        for (type in MetricType.entries) {
+            val rows = db.rawDailyMetricDao().getForDateAndMetric(dateStr, type.name)
+            for (row in rows) {
+                allRaw += HealthMetric(
+                    id = row.externalId ?: "${row.date}-${row.metric}-${row.source}",
+                    type = type,
+                    value = row.value,
+                    unit = MeasurementUnit.Count,
+                    start = kotlinx.datetime.Instant.fromEpochMilliseconds(date.atStartMs()),
+                    end = kotlinx.datetime.Instant.fromEpochMilliseconds(date.atStartMs() + 24 * 60 * 60 * 1000L),
+                    source = when (row.source) {
+                        "Fitbit" -> DataSource.Fitbit
+                        "GoogleHealth" -> DataSource.GoogleHealth
+                        else -> DataSource.HealthConnect
+                    },
+                )
+            }
         }
+        return allRaw
     }
 
     override suspend fun resetChangeToken() {
@@ -340,8 +320,8 @@ class DebugRepositoryImpl @Inject constructor(
     }
 
     override suspend fun dataStats(): DataStats {
-        val aggDao = db.dailyAggregateDao()
-        val metricCounts = aggDao.getAll()
+        val summaryDao = db.summaryDailyMetricDao()
+        val metricCounts = summaryDao.getAll()
             .groupBy { it.metric }
             .mapValues { (_, rows) -> rows.size }
 
@@ -352,9 +332,9 @@ class DebugRepositoryImpl @Inject constructor(
         val backfillComplete = cursorDate != null && !cursorDate.isAfter(earliest)
 
         return DataStats(
-            minStepDate = aggDao.minStepDate(),
-            maxStepDate = aggDao.maxStepDate(),
-            totalStepDays = aggDao.stepDayCount(),
+            minStepDate = summaryDao.minStepDate(),
+            maxStepDate = summaryDao.maxStepDate(),
+            totalStepDays = summaryDao.stepDayCount(),
             totalExerciseSessions = db.exerciseSessionDao().totalCount(),
             totalSleepSessions = db.sleepSessionDao().getAll().size,
             metricCounts = metricCounts,
@@ -363,10 +343,38 @@ class DebugRepositoryImpl @Inject constructor(
         )
     }
 
-    override suspend fun pendingQueueSize(): Int = db.dailyAggregateDao().dirtyCount()
+    override suspend fun pendingQueueSize(): Int = db.summaryDailyMetricDao().dirtyCount()
 
     override suspend fun fitbitSyncCursor(): String? =
         db.syncStateDao().get("fitbit_sync_cursor")?.value
+
+    override suspend fun exportDriveBackup(): String {
+        val payload = com.pulse.data.cloud.backup.BackupPayload(
+            version = 2,
+            dbVersion = com.pulse.data.local.PulseDatabase.VERSION,
+            appVersion = "export",
+            createdAtMs = clock.now().toEpochMilliseconds(),
+            rawDailyMetrics = db.rawDailyMetricDao().getAll(),
+            rawSamples = db.rawSampleDao().getAll(),
+            summaryDailyMetrics = db.summaryDailyMetricDao().getAll(),
+            exerciseSessions = db.exerciseSessionDao().getAll(),
+            exerciseHrSamples = db.exerciseHrSampleDao().getAll(),
+            exerciseLaps = db.exerciseLapDao().getAll(),
+            exerciseRoutePoints = db.exerciseRoutePointDao().getAll(),
+            sleepSessions = db.sleepSessionDao().getAll(),
+            syncState = db.syncStateDao().getAll(),
+            goals = db.goalDao().getAll(),
+        )
+        val json = kotlinx.serialization.json.Json {
+            prettyPrint = true
+            ignoreUnknownKeys = true
+        }
+        val jsonStr = json.encodeToString(com.pulse.data.cloud.backup.BackupPayload.serializer(), payload)
+        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val file = File(dir, "pulse_backup_${clock.now().toEpochMilliseconds()}.json")
+        FileWriter(file).use { it.write(jsonStr) }
+        return file.absolutePath
+    }
 
     override suspend fun debugBuildInfo(): DebugBuildInfo = DebugBuildInfo(
         appVersion = "0.1.0-debug",

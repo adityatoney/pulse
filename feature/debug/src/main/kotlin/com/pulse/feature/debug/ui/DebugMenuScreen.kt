@@ -153,6 +153,9 @@ private fun DebugMenuSheetBody(
         ActionItem("Export all data as CSV", "Opens share sheet") {
             onIntent(DebugMenuIntent.ExportCsv)
         }
+        ActionItem("Export backup as JSON", "Full DB snapshot, shareable") {
+            onIntent(DebugMenuIntent.ExportBackup)
+        }
 
         SectionHeader("Sync")
         SyncActionItem(state.syncWorkerState) {

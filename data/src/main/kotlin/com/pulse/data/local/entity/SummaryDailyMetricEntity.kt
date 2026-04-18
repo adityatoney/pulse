@@ -5,16 +5,18 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 @Entity(
-    tableName = "daily_aggregates",
+    tableName = "summary_daily_metrics",
     primaryKeys = ["date", "metric"],
 )
-data class DailyAggregateEntity(
-    val date: String,          // ISO yyyy-MM-dd in user's current timezone
-    val metric: String,        // MetricType.name
+data class SummaryDailyMetricEntity(
+    val date: String,
+    val metric: String,
     val total: Double,
     val goal: Double?,
     val sampleCount: Int,
     val computedAtMs: Long,
+    val computationVersion: Int = 1,
+    val sourceUsed: String? = null,
     val dirty: Boolean = true,
     val remoteVersion: Long? = null,
 )

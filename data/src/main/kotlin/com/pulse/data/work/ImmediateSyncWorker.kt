@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.pulse.data.sync.EnhancedHealthSyncManager
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -22,8 +23,9 @@ class ImmediateSyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        Log.d(TAG, "Starting immediate sync")
-        val result = syncManager.syncRecent(days = 7)
+        val forceFullFetch = inputData.getBoolean(KEY_FORCE_FULL_FETCH, false)
+        Log.d(TAG, "Starting immediate sync (forceFullFetch=$forceFullFetch)")
+        val result = syncManager.syncRecent(days = 7, forceFullFetch = forceFullFetch)
         return if (result.isSuccess) {
             Log.d(TAG, "Immediate sync succeeded")
             Result.success()
@@ -36,5 +38,8 @@ class ImmediateSyncWorker @AssistedInject constructor(
     companion object {
         const val UNIQUE_NAME = "pulse-immediate-sync"
         const val TAG = "ImmediateSync"
+        const val KEY_FORCE_FULL_FETCH = "force_full_fetch"
+
+        fun forceFullFetchData() = workDataOf(KEY_FORCE_FULL_FETCH to true)
     }
 }

@@ -46,6 +46,9 @@ interface DebugRepository {
 
     /** Returns the Fitbit sync cursor date (last synced date), or null if never synced. */
     suspend fun fitbitSyncCursor(): String?
+
+    /** Downloads the Drive backup and saves it as readable JSON to the cache dir. Returns the file path. */
+    suspend fun exportDriveBackup(): String
 }
 
 data class DataStats(

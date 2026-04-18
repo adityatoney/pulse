@@ -306,7 +306,7 @@ class HealthConnectDataSource @Inject constructor(
         val range = TimeRangeFilter.between(start, end)
         val records = c.readRecords(ReadRecordsRequest(WeightRecord::class, range)).records
         return records.groupBy { it.time.atZone(zone).toLocalDate() }
-            .mapValues { (_, recs) -> recs.last().weight.inKilograms }
+            .mapValues { (_, recs) -> recs.last().weight.inKilograms * KG_TO_LBS }
     }
 
     suspend fun readBodyFatRange(start: JavaInstant, end: JavaInstant, zone: ZoneId): Map<JavaLocalDate, Double> {
@@ -389,7 +389,7 @@ class HealthConnectDataSource @Inject constructor(
         val c = client ?: return null
         val range = dayRange(day, zone)
         val records = c.readRecords(ReadRecordsRequest(WeightRecord::class, range)).records
-        return records.lastOrNull()?.weight?.inKilograms
+        return records.lastOrNull()?.weight?.inKilograms?.let { it * KG_TO_LBS }
     }
 
     suspend fun readBodyFat(day: JavaLocalDate, zone: ZoneId): Double? {
@@ -561,6 +561,10 @@ class HealthConnectDataSource @Inject constructor(
     suspend fun deleteAllForOrigin(origin: DataOrigin) {
         // Debug helper: remove only records created by our package
         // (real impl iterates per record type; stub for now)
+    }
+
+    companion object {
+        const val KG_TO_LBS = 2.20462
     }
 
     private fun dayRange(day: JavaLocalDate, zone: ZoneId): TimeRangeFilter {

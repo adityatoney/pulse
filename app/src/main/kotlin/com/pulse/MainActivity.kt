@@ -33,6 +33,7 @@ import com.pulse.data.cloud.DriveAuthOutcome
 import com.pulse.data.cloud.fitbit.FitbitAuthManager
 import com.pulse.data.datastore.FeatureFlagRepository
 import com.pulse.data.health.HealthConnectDataSource
+import com.pulse.data.sync.EnhancedHealthSyncManager
 import com.pulse.data.work.SyncScheduler
 import com.pulse.feature.dashboard.navigation.Dashboard
 import com.pulse.feature.dashboard.navigation.dashboardScreen
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var driveAuthManager: DriveAuthManager
     @Inject lateinit var fitbitAuthManager: FitbitAuthManager
     @Inject lateinit var syncScheduler: SyncScheduler
+    @Inject lateinit var syncManager: EnhancedHealthSyncManager
 
     private val driveConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
@@ -65,8 +67,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val tokenResult = driveAuthManager.handleConsentResult(this@MainActivity, result.data)
             if (tokenResult.isSuccess) {
-                Log.d("Pulse", "Drive: consent granted, triggering sync")
-                syncScheduler.scheduleImmediateSync()
+                Log.d("Pulse", "Drive: consent granted")
             } else {
                 Log.d("Pulse", "Drive: consent failed: ${tokenResult.exceptionOrNull()?.message}")
             }
@@ -109,8 +110,7 @@ class MainActivity : ComponentActivity() {
             try {
                 when (val outcome = driveAuthManager.requestAuth(this@MainActivity)) {
                     is DriveAuthOutcome.Authorized -> {
-                        Log.d("Pulse", "Drive: already authorized, triggering sync")
-                        syncScheduler.scheduleImmediateSync()
+                        Log.d("Pulse", "Drive: already authorized")
                     }
                     is DriveAuthOutcome.ConsentRequired -> {
                         Log.d("Pulse", "Drive: launching consent screen")
@@ -120,6 +120,29 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.d("Pulse", "Drive: sign-in failed: ${e.message}")
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // HC requires foreground context — sync here, not via WorkManager.
+        // On cold starts, the system may not yet consider the UID in foreground,
+        // so retry with backoff if we get a SecurityException.
+        lifecycleScope.launch {
+            kotlinx.coroutines.delay(1_500)
+            val maxRetries = 3
+            for (attempt in 1..maxRetries) {
+                val result = runCatching { syncManager.syncRecent(days = 7) }
+                if (result.isSuccess) break
+                val cause = result.exceptionOrNull()
+                if (cause?.message?.contains("foreground") == true && attempt < maxRetries) {
+                    Log.d("Pulse", "HC foreground check failed (attempt $attempt/$maxRetries), retrying...")
+                    kotlinx.coroutines.delay(attempt * 2_000L)
+                } else {
+                    Log.w("Pulse", "Foreground sync failed: ${cause?.message}")
+                    break
+                }
             }
         }
     }

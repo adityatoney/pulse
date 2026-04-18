@@ -26,6 +26,7 @@ data class MetricDetailState(
     val comparisons: List<PeriodComparison> = emptyList(),
     val loading: Boolean = true,
     val error: String? = null,
+    val selectedBarIndex: Int? = null,
 )
 
 sealed interface MetricDetailIntent {
@@ -33,6 +34,7 @@ sealed interface MetricDetailIntent {
     data class ChangeTimeframe(val tf: Timeframe) : MetricDetailIntent
     data class MovePeriod(val forward: Boolean) : MetricDetailIntent
     data class DrillIntoMonth(val monthAnchor: LocalDate) : MetricDetailIntent
+    data class SelectBar(val index: Int) : MetricDetailIntent
     data object Back : MetricDetailIntent
 }
 

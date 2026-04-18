@@ -115,26 +115,20 @@ fun MetricDetailScreen(
             item {
                 val points = state.series?.points.orEmpty()
                 val values = points.map { it.value.toFloat() }
-                val goal = state.goal?.toFloat()
+                val chartGoal = scaledGoal(state)
                 val labels = barLabels(state)
-                val zone = TimeZone.currentSystemDefault()
                 MetricBarChart(
                     values = values,
-                    goal = goal,
+                    goal = chartGoal,
                     labels = labels,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
-                    onBarTapped = if (state.timeframe == Timeframe.ThreeMonths) { index ->
-                        val point = points.getOrNull(index)
-                        if (point != null) {
-                            val monthDate = point.bucketStart.toLocalDateTime(zone).date
-                            // Anchor to the last day of that month so the Month view covers it fully
-                            val firstOfMonth = LocalDate(monthDate.year, monthDate.monthNumber, 1)
-                            val lastOfMonth = firstOfMonth.plus(DatePeriod(months = 1)).minus(DatePeriod(days = 1))
-                            onIntent(MetricDetailIntent.DrillIntoMonth(lastOfMonth))
-                        }
-                    } else null,
+                    selectedIndex = state.selectedBarIndex,
+                    formatValue = { v -> formatBarValue(v, state.metric) },
+                    onBarTapped = { index ->
+                        onIntent(MetricDetailIntent.SelectBar(index))
+                    },
                 )
             }
             item {
@@ -222,8 +216,8 @@ private fun HeadlineBlock(state: MetricDetailState) {
 
 private fun titleFor(metric: MetricType): String = when (metric) {
     MetricType.Steps -> "Steps"
-    MetricType.Distance -> "Distance"
-    MetricType.Calories, MetricType.ActiveCalories -> "Calories"
+    MetricType.Distance, MetricType.ExerciseDistance -> "Distance"
+    MetricType.Calories, MetricType.ActiveCalories, MetricType.ExerciseCalories -> "Calories"
     MetricType.ZoneMinutes -> "Zone Minutes"
     MetricType.HeartRate -> "Heart Rate"
     MetricType.RestingHeartRate -> "Resting HR"
@@ -243,7 +237,7 @@ private fun formatHeadlineNumber(state: MetricDetailState): String {
     val value = if (state.timeframe == Timeframe.Day) state.total else state.average
     return when (state.metric) {
         MetricType.Steps, MetricType.Calories, MetricType.ActiveCalories, MetricType.ZoneMinutes ->
-            value.toInt().toString()
+            "%,d".format(value.toInt())
         MetricType.Distance -> "%.2f".format(value)
         else -> "%.1f".format(value)
     }
@@ -274,7 +268,7 @@ private fun helperTextFor(state: MetricDetailState): String {
             "$pct% of daily goal"
         } else ""
     }
-    val total = state.total.toInt()
+    val total = "%,d".format(state.total.toInt())
     val hits = state.goalHitDays
     val bucketWord = when (state.timeframe) {
         Timeframe.Week -> "day"
@@ -369,6 +363,31 @@ private fun barLabels(state: MetricDetailState): List<String> {
             }
         }
     }
+}
+
+/**
+ * Scale the daily goal to match the bar bucket size.
+ * Week view: bars = days → daily goal (unchanged).
+ * Month view: bars = weeks → daily goal × 7.
+ * 3M/6M/Year: bars = months → daily goal × 30.
+ * Day view: bars = hours → no goal line (doesn't make sense hourly).
+ */
+private fun scaledGoal(state: MetricDetailState): Float? {
+    val dailyGoal = state.goal?.toFloat() ?: return null
+    if (dailyGoal <= 0f) return null
+    return when (state.timeframe) {
+        Timeframe.Day -> null
+        Timeframe.Week -> dailyGoal
+        Timeframe.Month -> dailyGoal * 7f
+        Timeframe.ThreeMonths, Timeframe.SixMonths, Timeframe.Year -> dailyGoal * 30f
+    }
+}
+
+private fun formatBarValue(v: Float, metric: MetricType): String = when (metric) {
+    MetricType.Distance -> "%.2f".format(v)
+    MetricType.Weight, MetricType.BodyFat, MetricType.SpO2, MetricType.SkinTemperature,
+    MetricType.HRV, MetricType.VO2Max -> "%.1f".format(v)
+    else -> "%,d".format(v.toInt())
 }
 
 private fun TrendDirection.toDelta() = when (this) {

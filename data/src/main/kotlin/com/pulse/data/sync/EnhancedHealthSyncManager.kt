@@ -1,16 +1,19 @@
 package com.pulse.data.sync
 
 import android.util.Log
-import com.pulse.data.datastore.PreferencesRepository
+import com.pulse.data.compute.SummaryComputeEngine
 import com.pulse.data.health.HealthConnectDataSource
-import com.pulse.data.local.dao.DailyAggregateDao
+import com.pulse.data.local.dao.ComputeQueueDao
 import com.pulse.data.local.dao.ExerciseSessionDao
 import com.pulse.data.local.dao.ExerciseHrSampleDao
-import com.pulse.data.local.dao.GoalDao
+import com.pulse.data.local.dao.RawDailyMetricDao
+import com.pulse.data.local.dao.RawSampleDao
 import com.pulse.data.local.dao.SleepSessionDao
 import com.pulse.data.local.dao.SyncStateDao
-import com.pulse.data.local.entity.DailyAggregateEntity
+import com.pulse.data.local.entity.ComputeQueueEntity
 import com.pulse.data.local.entity.ExerciseSessionEntity
+import com.pulse.data.local.entity.RawDailyMetricEntity
+import com.pulse.data.local.entity.RawSampleEntity
 import com.pulse.data.local.entity.SleepSessionEntity
 import com.pulse.data.local.entity.SyncStateEntity
 import com.pulse.domain.model.MetricType
@@ -27,10 +30,6 @@ import javax.inject.Singleton
 
 private const val TAG = "EnhancedSync"
 private const val METERS_PER_MILE = 1_609.34
-private const val DEFAULT_STEP_GOAL = 10_000.0
-private const val DEFAULT_DISTANCE_GOAL_MI = 5.0
-private const val DEFAULT_CALORIE_GOAL = 2_500.0
-private const val DEFAULT_ZONE_MIN_GOAL = 22.0
 private const val CHANGES_TOKEN_KEY = "hc_changes_token"
 private const val BACKFILL_CURSOR_KEY = "hc_backfill_cursor"
 private const val QUOTA_PAUSE_KEY = "hc_quota_pause_until"
@@ -40,22 +39,19 @@ private const val QUOTA_PAUSE_DURATION_MS = 5 * 60 * 1000L
 @Singleton
 class EnhancedHealthSyncManager @Inject constructor(
     private val hc: HealthConnectDataSource,
-    private val aggregateDao: DailyAggregateDao,
+    private val rawDailyDao: RawDailyMetricDao,
+    private val rawSampleDao: RawSampleDao,
+    private val computeQueueDao: ComputeQueueDao,
+    private val computeEngine: SummaryComputeEngine,
     private val exerciseDao: ExerciseSessionDao,
     private val hrSampleDao: ExerciseHrSampleDao,
     private val sleepDao: SleepSessionDao,
     private val syncStateDao: SyncStateDao,
-    private val goalDao: GoalDao,
-    private val prefsRepo: PreferencesRepository,
     private val clock: Clock,
 ) {
 
     /**
      * Tier 1: Sync recent data.
-     *
-     * @param days how many days to look back
-     * @param forceFullFetch when true (user-initiated refresh), always do a bulk
-     *   fetch instead of relying on the Changes API, which can lag behind.
      */
     suspend fun syncRecent(days: Int = 7, forceFullFetch: Boolean = false): Result<Unit> = runCatching {
         if (!hc.isAvailable()) return@runCatching
@@ -64,7 +60,6 @@ class EnhancedHealthSyncManager @Inject constructor(
             return@runCatching
         }
 
-        // For background periodic syncs, try incremental first
         if (!forceFullFetch) {
             val incrementalResult = syncIncremental()
             if (incrementalResult.isSuccess) {
@@ -73,7 +68,6 @@ class EnhancedHealthSyncManager @Inject constructor(
             }
         }
 
-        // Bulk fetch for the requested range
         Log.d(TAG, "Type-first bulk fetch for last $days days (forced=$forceFullFetch)")
         val zone = ZoneId.systemDefault()
         val today = JavaLocalDate.now(zone)
@@ -86,16 +80,14 @@ class EnhancedHealthSyncManager @Inject constructor(
             fetchExerciseWithDetails(start, today, zone)
         }
 
-        // Compute activity-only aggregates from DB exercise sessions (covers HC + Fitbit sources)
-        computeExerciseAggregates(start, today, zone)
+        // Trigger summary computation from raw data
+        computeEngine.processQueue()
 
-        // Request a new changes token for future incremental syncs
         hc.requestChangesToken()?.let { saveToken(it) }
     }
 
     /**
      * Tier 2: Backfill remaining history in [chunkDays]-day chunks.
-     * Resumes from where it left off via [BACKFILL_CURSOR_KEY].
      */
     suspend fun backfillHistory(totalDays: Int = 365, chunkDays: Int = 30): Result<Unit> = runCatching {
         if (!hc.isAvailable()) return@runCatching
@@ -103,10 +95,9 @@ class EnhancedHealthSyncManager @Inject constructor(
         val today = JavaLocalDate.now(zone)
         val earliest = today.minusDays(totalDays.toLong())
 
-        // Resume from cursor if available
         val cursorEntity = syncStateDao.get(BACKFILL_CURSOR_KEY)
         val cursor = cursorEntity?.value?.let { runCatching { JavaLocalDate.parse(it) }.getOrNull() }
-        val startFrom = cursor ?: today.minusDays(7) // Skip recent days already covered by Tier 1
+        val startFrom = cursor ?: today.minusDays(7)
 
         if (!startFrom.isAfter(earliest)) {
             Log.d(TAG, "Backfill already complete")
@@ -131,9 +122,8 @@ class EnhancedHealthSyncManager @Inject constructor(
                 fetchBulkSleep(chunkStart, chunkEnd, zone)
                 fetchExerciseWithDetails(chunkStart, chunkEnd, zone)
             }
-            computeExerciseAggregates(chunkStart, chunkEnd, zone)
+            computeEngine.processQueue()
 
-            // Update cursor so we can resume after crash
             syncStateDao.upsert(SyncStateEntity(
                 key = BACKFILL_CURSOR_KEY,
                 value = chunkStart.toString(),
@@ -148,10 +138,6 @@ class EnhancedHealthSyncManager @Inject constructor(
         Log.d(TAG, "Backfill complete")
     }
 
-    /**
-     * Incremental sync using the Health Connect Changes API.
-     * Returns failure if no token exists or token expired.
-     */
     suspend fun syncIncremental(): Result<Unit> = runCatching {
         val token = getStoredToken() ?: throw NoTokenException()
         Log.d(TAG, "Attempting incremental sync with changes token")
@@ -170,19 +156,17 @@ class EnhancedHealthSyncManager @Inject constructor(
                 }
                 Log.d(TAG, "Changes detected: ${result.upsertedRecordTypes.size} types updated, ${result.deletionCount} deletions")
 
-                // Re-fetch only affected types for recent period
                 val zone = ZoneId.systemDefault()
                 val today = JavaLocalDate.now(zone)
                 val start = today.minusDays(7)
 
                 executeWithQuotaGuard {
-                    // Always refresh aggregates (cheap)
                     fetchBulkAggregates(start, today, zone)
                     fetchBulkVitals(start, today, zone)
                     fetchBulkSleep(start, today, zone)
                     fetchExerciseWithDetails(start, today, zone)
                 }
-                computeExerciseAggregates(start, today, zone)
+                computeEngine.processQueue()
 
                 saveToken(result.nextToken)
             }
@@ -196,74 +180,51 @@ class EnhancedHealthSyncManager @Inject constructor(
         end: JavaLocalDate,
         zone: ZoneId,
     ) {
-        val goals = buildGoalMap()
         val nowMs = clock.now().toEpochMilliseconds()
-        val prefs = prefsRepo.getMetricDisplay()
-        val rows = mutableListOf<DailyAggregateEntity>()
+        val rawRows = mutableListOf<RawDailyMetricEntity>()
+        val dirtyEntries = mutableListOf<ComputeQueueEntity>()
 
         val steps = hc.stepsByDay(start, end, zone)
         steps.forEach { (day, count) ->
-            rows += DailyAggregateEntity(
-                date = day.toString(), metric = MetricType.Steps.name,
-                total = count.toDouble(), goal = goals[MetricType.Steps],
-                sampleCount = 1, computedAtMs = nowMs,
+            val dateStr = day.toString()
+            rawRows += RawDailyMetricEntity(
+                date = dateStr, metric = MetricType.Steps.name, source = "HealthConnect",
+                value = count.toDouble(), unit = "count",
+                externalId = "hc-steps-$dateStr", ingestedAtMs = nowMs,
             )
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.Steps.name, enqueuedAtMs = nowMs)
         }
 
-        // Distance
-        if (!prefs.activityOnlyDistance) {
-            val dist = hc.distanceByDay(start, end, zone)
-            dist.forEach { (day, meters) ->
-                rows += DailyAggregateEntity(
-                    date = day.toString(), metric = MetricType.Distance.name,
-                    total = meters / METERS_PER_MILE, goal = goals[MetricType.Distance],
-                    sampleCount = 1, computedAtMs = nowMs,
-                )
-            }
-        } else {
-            // Activity-only: zero out HC total distance; exercise sessions will upsert real values
-            Log.d(TAG, "Activity-only distance: zeroing HC totals for ${steps.size} days")
-            steps.forEach { (day, _) ->
-                rows += DailyAggregateEntity(
-                    date = day.toString(), metric = MetricType.Distance.name,
-                    total = 0.0, goal = goals[MetricType.Distance],
-                    sampleCount = 0, computedAtMs = nowMs,
-                )
-            }
+        val dist = hc.distanceByDay(start, end, zone)
+        dist.forEach { (day, meters) ->
+            val dateStr = day.toString()
+            val miles = meters / METERS_PER_MILE
+            rawRows += RawDailyMetricEntity(
+                date = dateStr, metric = MetricType.Distance.name, source = "HealthConnect",
+                value = miles, unit = "miles",
+                externalId = "hc-distance-$dateStr", ingestedAtMs = nowMs,
+            )
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.Distance.name, enqueuedAtMs = nowMs)
         }
 
-        // Active calories
-        if (!prefs.activityOnlyCalories) {
-            val cals = hc.activeCaloriesByDay(start, end, zone)
-            for ((day, active) in cals) {
-                if (active > 0) {
-                    Log.d(TAG, "ActiveCal $day = $active kcal (from HC ActiveCaloriesBurnedRecord)")
-                    rows += DailyAggregateEntity(
-                        date = day.toString(), metric = MetricType.ActiveCalories.name,
-                        total = active, goal = goals[MetricType.ActiveCalories],
-                        sampleCount = 1, computedAtMs = nowMs,
-                    )
-                }
-            }
-        } else {
-            // Activity-only: zero out; exercise sessions will upsert real values
-            Log.d(TAG, "Activity-only calories: zeroing HC totals for ${steps.size} days")
-            steps.forEach { (day, _) ->
-                rows += DailyAggregateEntity(
-                    date = day.toString(), metric = MetricType.ActiveCalories.name,
-                    total = 0.0, goal = goals[MetricType.ActiveCalories],
-                    sampleCount = 0, computedAtMs = nowMs,
+        val cals = hc.activeCaloriesByDay(start, end, zone)
+        for ((day, active) in cals) {
+            if (active > 0) {
+                val dateStr = day.toString()
+                rawRows += RawDailyMetricEntity(
+                    date = dateStr, metric = MetricType.ActiveCalories.name, source = "HealthConnect",
+                    value = active, unit = "kcal",
+                    externalId = "hc-activecal-$dateStr", ingestedAtMs = nowMs,
                 )
+                dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.ActiveCalories.name, enqueuedAtMs = nowMs)
             }
         }
 
-        Log.d(TAG, "Aggregates: ${rows.size} rows (steps=${steps.size}d)")
-        if (rows.isNotEmpty()) aggregateDao.upsert(rows)
+        Log.d(TAG, "Aggregates: ${rawRows.size} raw rows (steps=${steps.size}d)")
+        if (rawRows.isNotEmpty()) rawDailyDao.insertAll(rawRows)
+        if (dirtyEntries.isNotEmpty()) computeQueueDao.enqueue(dirtyEntries)
     }
 
-    /**
-     * Bulk-fetch all vitals for the range. 7 API calls total instead of 7 × N days.
-     */
     private suspend fun fetchBulkVitals(
         start: JavaLocalDate,
         end: JavaLocalDate,
@@ -272,9 +233,9 @@ class EnhancedHealthSyncManager @Inject constructor(
         val nowMs = clock.now().toEpochMilliseconds()
         val startInstant = start.atStartOfDay(zone).toInstant()
         val endInstant = end.plusDays(1).atStartOfDay(zone).toInstant()
-        val rows = mutableListOf<DailyAggregateEntity>()
+        val rawRows = mutableListOf<RawDailyMetricEntity>()
+        val dirtyEntries = mutableListOf<ComputeQueueEntity>()
 
-        // 7 calls total for all low-density types
         val weights = hc.readWeightRange(startInstant, endInstant, zone)
         val bodyFats = hc.readBodyFatRange(startInstant, endInstant, zone)
         val spo2s = hc.readSpO2Range(startInstant, endInstant, zone)
@@ -283,33 +244,23 @@ class EnhancedHealthSyncManager @Inject constructor(
         val skinTemps = hc.readSkinTemperatureRange(startInstant, endInstant, zone)
         val restingHrs = hc.readRestingHeartRateRange(startInstant, endInstant, zone)
 
-        weights.forEach { (day, kg) ->
-            rows += DailyAggregateEntity(date = day.toString(), metric = MetricType.Weight.name, total = kg, goal = null, sampleCount = 1, computedAtMs = nowMs)
+        fun addVital(day: JavaLocalDate, metric: MetricType, value: Double, unit: String) {
+            val dateStr = day.toString()
+            rawRows += RawDailyMetricEntity(date = dateStr, metric = metric.name, source = "HealthConnect", value = value, unit = unit, externalId = "hc-${metric.name.lowercase()}-$dateStr", ingestedAtMs = nowMs)
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = metric.name, enqueuedAtMs = nowMs)
         }
-        bodyFats.forEach { (day, pct) ->
-            rows += DailyAggregateEntity(date = day.toString(), metric = MetricType.BodyFat.name, total = pct, goal = null, sampleCount = 1, computedAtMs = nowMs)
-        }
-        spo2s.forEach { (day, pct) ->
-            rows += DailyAggregateEntity(date = day.toString(), metric = MetricType.SpO2.name, total = pct, goal = null, sampleCount = 1, computedAtMs = nowMs)
-        }
-        hrvs.forEach { (day, ms) ->
-            rows += DailyAggregateEntity(date = day.toString(), metric = MetricType.HRV.name, total = ms, goal = null, sampleCount = 1, computedAtMs = nowMs)
-        }
-        vo2s.forEach { (day, v) ->
-            rows += DailyAggregateEntity(date = day.toString(), metric = MetricType.VO2Max.name, total = v, goal = null, sampleCount = 1, computedAtMs = nowMs)
-        }
-        skinTemps.forEach { (day, delta) ->
-            rows += DailyAggregateEntity(date = day.toString(), metric = MetricType.SkinTemperature.name, total = delta, goal = null, sampleCount = 1, computedAtMs = nowMs)
-        }
-        restingHrs.forEach { (day, bpm) ->
-            rows += DailyAggregateEntity(date = day.toString(), metric = MetricType.RestingHeartRate.name, total = bpm.toDouble(), goal = null, sampleCount = 1, computedAtMs = nowMs)
-        }
+
+        weights.forEach { (day, lbs) -> addVital(day, MetricType.Weight, lbs, "lbs") }
+        bodyFats.forEach { (day, pct) -> addVital(day, MetricType.BodyFat, pct, "percent") }
+        spo2s.forEach { (day, pct) -> addVital(day, MetricType.SpO2, pct, "percent") }
+        hrvs.forEach { (day, ms) -> addVital(day, MetricType.HRV, ms, "ms") }
+        vo2s.forEach { (day, v) -> addVital(day, MetricType.VO2Max, v, "ml/kg/min") }
+        skinTemps.forEach { (day, delta) -> addVital(day, MetricType.SkinTemperature, delta, "celsius") }
+        restingHrs.forEach { (day, bpm) -> addVital(day, MetricType.RestingHeartRate, bpm.toDouble(), "bpm") }
 
         // Compute zone minutes from bulk HR samples + resting HR
         val hrSamples = hc.readHeartRateSamplesRange(startInstant, endInstant)
         if (hrSamples.isNotEmpty()) {
-            val goals = buildGoalMap()
-            // Group HR samples by day
             val hrByDay = hrSamples.groupBy { (instant, _) -> instant.atZone(zone).toLocalDate() }
             for ((day, samples) in hrByDay) {
                 val restingHr = restingHrs[day] ?: 65
@@ -320,15 +271,30 @@ class EnhancedHealthSyncManager @Inject constructor(
                     )
                 }
                 val breakdown = ZoneMinuteCalculator.calculate(zmSamples, restingHr, age = 45)
-                rows += DailyAggregateEntity(
-                    date = day.toString(), metric = MetricType.ZoneMinutes.name,
-                    total = breakdown.total.toDouble(), goal = goals[MetricType.ZoneMinutes],
-                    sampleCount = samples.size, computedAtMs = nowMs,
+                val dateStr = day.toString()
+                rawRows += RawDailyMetricEntity(
+                    date = dateStr, metric = MetricType.ZoneMinutes.name, source = "HealthConnect",
+                    value = breakdown.total.toDouble(), unit = "minutes",
+                    externalId = "hc-zoneminutes-$dateStr", ingestedAtMs = nowMs,
+                )
+                dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.ZoneMinutes.name, enqueuedAtMs = nowMs)
+            }
+
+            // Store raw HR samples
+            val rawHrSamples = hrSamples.map { (instant, bpm) ->
+                RawSampleEntity(
+                    type = "HeartRate", value = bpm.toDouble(), unit = "bpm",
+                    startUtcMs = instant.toEpochMilli(), endUtcMs = instant.toEpochMilli(),
+                    source = "HealthConnect",
+                    externalId = "hc-hr-${instant.toEpochMilli()}",
+                    ingestedAtMs = nowMs,
                 )
             }
+            rawSampleDao.insertAll(rawHrSamples)
         }
 
-        if (rows.isNotEmpty()) aggregateDao.upsert(rows)
+        if (rawRows.isNotEmpty()) rawDailyDao.insertAll(rawRows)
+        if (dirtyEntries.isNotEmpty()) computeQueueDao.enqueue(dirtyEntries)
     }
 
     private suspend fun fetchBulkSleep(
@@ -378,61 +344,66 @@ class EnhancedHealthSyncManager @Inject constructor(
         val exerciseRecords = hc.readExerciseSessions(start, end, zone)
         Log.d(TAG, "HC returned ${exerciseRecords.size} exercise sessions for range $start to $end")
         if (exerciseRecords.isEmpty()) return
-        exerciseRecords.forEach { rec ->
-            Log.d(TAG, "  Exercise: type=${rec.exerciseType} title=${rec.title} " +
-                "start=${rec.startTime} end=${rec.endTime} pkg=${rec.metadata.dataOrigin.packageName}")
-        }
 
         val restingHrCache = mutableMapOf<JavaLocalDate, Int>()
-        val goals = buildGoalMap()
         val nowMs = clock.now().toEpochMilliseconds()
 
-        val exerciseEntities = exerciseRecords.map { rec ->
-            val typeName = exerciseTypeName(rec.exerciseType)
-            val agg = hc.aggregateForTimeRange(rec.startTime, rec.endTime)
-            val durationMs = rec.endTime.toEpochMilli() - rec.startTime.toEpochMilli()
-            val avgPace = if (agg.meters > 0) {
-                ((durationMs / 1000.0) / (agg.meters / METERS_PER_MILE)).toInt()
-            } else null
+        val exerciseEntities = exerciseRecords.mapNotNull { rec ->
+            try {
+                val typeName = exerciseTypeName(rec.exerciseType)
+                val agg = hc.aggregateForTimeRange(rec.startTime, rec.endTime)
+                val durationMs = rec.endTime.toEpochMilli() - rec.startTime.toEpochMilli()
+                val avgPace = if (agg.meters > 0) {
+                    ((durationMs / 1000.0) / (agg.meters / METERS_PER_MILE)).toInt()
+                } else null
 
-            val sessionHr = hc.readHeartRateSamplesForRange(rec.startTime, rec.endTime)
-            val avgHr = if (sessionHr.isNotEmpty()) sessionHr.map { it.second }.average().toInt() else null
-            val maxHr = if (sessionHr.isNotEmpty()) sessionHr.maxOf { it.second } else null
-
-            val sessionZoneMin = if (sessionHr.isNotEmpty()) {
-                val sessionDay = rec.startTime.atZone(zone).toLocalDate()
-                val restingHr = restingHrCache.getOrPut(sessionDay) {
-                    hc.restingHeartRate(sessionDay, zone) ?: 65
+                val sessionHr = try {
+                    hc.readHeartRateSamplesForRange(rec.startTime, rec.endTime)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to read HR for exercise ${rec.metadata.id}: ${e.message}")
+                    emptyList()
                 }
-                val zmSamples = sessionHr.map { (instant, bpm) ->
-                    ZoneMinuteCalculator.HrSample(
-                        at = Instant.fromEpochMilliseconds(instant.toEpochMilli()),
-                        bpm = bpm,
-                    )
-                }
-                ZoneMinuteCalculator.calculate(zmSamples, restingHr, age = 45).total
-            } else null
+                val avgHr = if (sessionHr.isNotEmpty()) sessionHr.map { it.second }.average().toInt() else null
+                val maxHr = if (sessionHr.isNotEmpty()) sessionHr.maxOf { it.second } else null
 
-            ExerciseSessionEntity(
-                id = rec.metadata.id,
-                type = rec.title ?: typeName,
-                startUtcMs = rec.startTime.toEpochMilli(),
-                endUtcMs = rec.endTime.toEpochMilli(),
-                distanceMeters = agg.meters,
-                calories = agg.kcal,
-                steps = agg.steps.toInt().takeIf { it > 0 },
-                avgHr = avgHr, maxHr = maxHr,
-                avgPaceSecondsPerMile = avgPace,
-                elevationGainMeters = null,
-                zoneMinutes = sessionZoneMin,
-                sourceJson = rec.metadata.dataOrigin.packageName,
-                dirty = true,
-            )
+                val sessionZoneMin = if (sessionHr.isNotEmpty()) {
+                    val sessionDay = rec.startTime.atZone(zone).toLocalDate()
+                    val restingHr = restingHrCache.getOrPut(sessionDay) {
+                        hc.restingHeartRate(sessionDay, zone) ?: 65
+                    }
+                    val zmSamples = sessionHr.map { (instant, bpm) ->
+                        ZoneMinuteCalculator.HrSample(
+                            at = Instant.fromEpochMilliseconds(instant.toEpochMilli()),
+                            bpm = bpm,
+                        )
+                    }
+                    ZoneMinuteCalculator.calculate(zmSamples, restingHr, age = 45).total
+                } else null
+
+                ExerciseSessionEntity(
+                    id = rec.metadata.id,
+                    type = rec.title ?: typeName,
+                    startUtcMs = rec.startTime.toEpochMilli(),
+                    endUtcMs = rec.endTime.toEpochMilli(),
+                    distanceMeters = agg.meters,
+                    calories = agg.kcal,
+                    steps = agg.steps.toInt().takeIf { it > 0 },
+                    avgHr = avgHr, maxHr = maxHr,
+                    avgPaceSecondsPerMile = avgPace,
+                    elevationGainMeters = null,
+                    zoneMinutes = sessionZoneMin,
+                    sourceJson = rec.metadata.dataOrigin.packageName,
+                    dirty = true,
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to process exercise ${rec.metadata.id}: ${e.message}")
+                null
+            }
         }
         exerciseDao.upsert(exerciseEntities)
 
-        // Sum per-exercise zone minutes as daily aggregate
-        val zmRows = mutableListOf<DailyAggregateEntity>()
+        // Enqueue Distance and ActiveCalories for compute engine
+        val dirtyEntries = mutableListOf<ComputeQueueEntity>()
         val sessionsByDay = exerciseEntities.groupBy {
             Instant.fromEpochMilliseconds(it.startUtcMs)
                 .let { inst ->
@@ -441,79 +412,12 @@ class EnhancedHealthSyncManager @Inject constructor(
                     }
                 }
         }
-        for ((dateStr, sessions) in sessionsByDay) {
-            val totalZm = sessions.sumOf { it.zoneMinutes ?: 0 }
-            if (totalZm > 0) {
-                zmRows += DailyAggregateEntity(
-                    date = dateStr, metric = MetricType.ZoneMinutes.name,
-                    total = totalZm.toDouble(), goal = goals[MetricType.ZoneMinutes],
-                    sampleCount = sessions.size, computedAtMs = nowMs,
-                )
-            }
-        }
-        if (zmRows.isNotEmpty()) aggregateDao.upsert(zmRows)
-    }
 
-    /**
-     * Compute daily distance/calories from DB exercise sessions.
-     * Handles both activity-only mode (user preference) and calorie fallback
-     * (when HC doesn't provide ActiveCaloriesBurnedRecord, e.g. Fitbit devices).
-     * Runs after all data sources (HC + Fitbit) have written sessions.
-     */
-    /**
-     * Compute daily distance/calories from DB exercise sessions.
-     * - Distance: only in activity-only mode
-     * - Calories: always (exercise session sum is the best source since Fitbit
-     *   doesn't write ActiveCaloriesBurnedRecord to HC)
-     */
-    private suspend fun computeExerciseAggregates(
-        start: JavaLocalDate,
-        end: JavaLocalDate,
-        zone: ZoneId,
-    ) {
-        val prefs = prefsRepo.getMetricDisplay()
-        val goals = buildGoalMap()
-        val nowMs = clock.now().toEpochMilliseconds()
-        val startMs = start.atStartOfDay(zone).toInstant().toEpochMilli()
-        val endMs = end.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-
-        val dbSessions = exerciseDao.getRange(startMs, endMs)
-        Log.d(TAG, "Exercise aggregate pass: ${dbSessions.size} DB sessions for $start to $end")
-        if (dbSessions.isEmpty()) return
-
-        val rows = mutableListOf<DailyAggregateEntity>()
-        val sessionsByDay = dbSessions.groupBy {
-            Instant.fromEpochMilliseconds(it.startUtcMs)
-                .let { inst ->
-                    kotlinx.datetime.TimeZone.currentSystemDefault().let { tz ->
-                        inst.toLocalDateTime(tz).date.toString()
-                    }
-                }
+        for ((dateStr, _) in sessionsByDay) {
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.Distance.name, enqueuedAtMs = nowMs)
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.ActiveCalories.name, enqueuedAtMs = nowMs)
         }
-        for ((dateStr, sessions) in sessionsByDay) {
-            // Distance: only when activity-only mode is on
-            if (prefs.activityOnlyDistance) {
-                val totalDist = sessions.sumOf { it.distanceMeters ?: 0.0 }
-                Log.d(TAG, "Distance $dateStr = ${totalDist / METERS_PER_MILE} mi (${sessions.size} sessions)")
-                rows += DailyAggregateEntity(
-                    date = dateStr, metric = MetricType.Distance.name,
-                    total = totalDist / METERS_PER_MILE, goal = goals[MetricType.Distance],
-                    sampleCount = sessions.size, computedAtMs = nowMs,
-                )
-            }
-            // Calories: always write exercise session sum — HC ActiveCaloriesBurnedRecord
-            // is always 0 for Fitbit users, so exercise sessions are the only reliable source
-            val totalCal = sessions.sumOf { it.calories ?: 0.0 }
-            if (totalCal > 0) {
-                Log.d(TAG, "ActiveCal $dateStr = $totalCal kcal (${sessions.size} sessions)")
-                rows += DailyAggregateEntity(
-                    date = dateStr, metric = MetricType.ActiveCalories.name,
-                    total = totalCal, goal = goals[MetricType.ActiveCalories],
-                    sampleCount = sessions.size, computedAtMs = nowMs,
-                )
-            }
-        }
-        if (rows.isNotEmpty()) aggregateDao.upsert(rows)
+        if (dirtyEntries.isNotEmpty()) computeQueueDao.enqueue(dirtyEntries)
     }
 
     // --- Quota management -----------------------------------------------------
@@ -562,19 +466,6 @@ class EnhancedHealthSyncManager @Inject constructor(
     }
 
     // --- Helpers ---------------------------------------------------------------
-
-    private suspend fun buildGoalMap(): Map<MetricType, Double> {
-        val map = mutableMapOf(
-            MetricType.Steps to DEFAULT_STEP_GOAL,
-            MetricType.Distance to DEFAULT_DISTANCE_GOAL_MI,
-            MetricType.ActiveCalories to DEFAULT_CALORIE_GOAL,
-            MetricType.ZoneMinutes to DEFAULT_ZONE_MIN_GOAL,
-        )
-        for (metric in map.keys.toList()) {
-            goalDao.get(metric.name)?.let { map[metric] = it.target }
-        }
-        return map
-    }
 
     private fun exerciseTypeName(type: Int): String = when (type) {
         androidx.health.connect.client.records.ExerciseSessionRecord.EXERCISE_TYPE_RUNNING -> "Running"

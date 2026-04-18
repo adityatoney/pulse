@@ -605,7 +605,7 @@ private fun BodyMetricsSection(state: DashboardState, onIntent: (DashboardIntent
                 BodyMetricCard(
                     icon = Icons.Outlined.MonitorWeight,
                     value = "%.1f".format(w),
-                    unit = "kg",
+                    unit = "lbs",
                     label = "Weight",
                     onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.Weight)) },
                     modifier = Modifier.weight(1f),

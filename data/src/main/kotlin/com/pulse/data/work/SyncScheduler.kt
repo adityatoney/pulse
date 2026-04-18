@@ -26,7 +26,7 @@ class SyncScheduler @Inject constructor(
             .build()
         workManager.enqueueUniqueWork(
             ImmediateSyncWorker.UNIQUE_NAME,
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.REPLACE,
             request,
         )
     }

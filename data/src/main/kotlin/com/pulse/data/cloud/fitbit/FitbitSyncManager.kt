@@ -1,18 +1,19 @@
 package com.pulse.data.cloud.fitbit
 
 import android.util.Log
-import com.pulse.data.local.dao.DailyAggregateDao
+import com.pulse.data.compute.SummaryComputeEngine
+import com.pulse.data.local.dao.ComputeQueueDao
 import com.pulse.data.local.dao.ExerciseSessionDao
-import com.pulse.data.local.dao.GoalDao
+import com.pulse.data.local.dao.RawDailyMetricDao
 import com.pulse.data.local.dao.SleepSessionDao
 import com.pulse.data.local.dao.SyncStateDao
-import com.pulse.data.local.entity.DailyAggregateEntity
+import com.pulse.data.local.entity.ComputeQueueEntity
 import com.pulse.data.local.entity.ExerciseSessionEntity
+import com.pulse.data.local.entity.RawDailyMetricEntity
 import com.pulse.data.local.entity.SleepSessionEntity
 import com.pulse.data.local.entity.SyncStateEntity
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.util.Clock
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,29 +26,20 @@ import javax.inject.Singleton
 
 private const val TAG = "FitbitSync"
 private const val METERS_PER_MILE = 1_609.34
+private const val KG_TO_LBS = 2.20462
 private const val FITBIT_CURSOR_KEY = "fitbit_sync_cursor"
 private const val MIN_RATE_LIMIT = 10
 
-/**
- * Orchestrates syncing data from the Fitbit Web API into the local Room database.
- *
- * Uses Fitbit's efficient time-series endpoints for bulk historical data:
- * - Steps, distance, calories, active minutes: up to 1095 days per request
- * - Activity logs (exercise sessions): paginated, unlimited history
- * - Sleep: up to 100 days per request
- * - Heart rate, weight: up to 30 days per request
- *
- * Typical API call count for a full year backfill: ~35-40 calls (vs 150/hour limit).
- */
 @Singleton
 class FitbitSyncManager @Inject constructor(
     private val fitbitClient: FitbitRestClient,
     private val fitbitAuth: FitbitAuthManager,
-    private val aggregateDao: DailyAggregateDao,
+    private val rawDailyDao: RawDailyMetricDao,
+    private val computeQueueDao: ComputeQueueDao,
+    private val computeEngine: SummaryComputeEngine,
     private val exerciseDao: ExerciseSessionDao,
     private val sleepDao: SleepSessionDao,
     private val syncStateDao: SyncStateDao,
-    private val goalDao: GoalDao,
     private val clock: Clock,
 ) {
     private val _progress = MutableStateFlow("")
@@ -58,10 +50,6 @@ class FitbitSyncManager @Inject constructor(
         Log.d(TAG, msg)
     }
 
-    /**
-     * Full sync from Fitbit. Syncs from the last cursor date to today.
-     * On first run, fetches up to [maxHistoryYears] years of data.
-     */
     suspend fun sync(maxHistoryYears: Int = 5): Result<Unit> = runCatching {
         if (!fitbitAuth.tryRestoreTokens()) {
             Log.d(TAG, "Not authenticated with Fitbit, skipping sync")
@@ -74,31 +62,25 @@ class FitbitSyncManager @Inject constructor(
 
         emitProgress("Starting sync: $startDate → $today")
 
-        // Phase 1: Daily aggregates (very efficient — 5 API calls for up to 3 years)
         emitProgress("Phase 1/4: Daily aggregates...")
         syncDailyAggregates(startDate, today)
 
-        // Phase 2: Exercise logs (paginated, unlimited history)
         emitProgress("Phase 2/4: Exercise logs...")
         syncExerciseLogs(startDate)
 
-        // Phase 3: Sleep logs (100-day chunks)
         emitProgress("Phase 3/4: Sleep logs...")
         syncSleepLogs(startDate, today)
 
-        // Phase 4: Vitals — resting HR + weight (30-day chunks)
         emitProgress("Phase 4/4: Vitals (HR, weight)...")
         syncVitals(startDate, today)
 
-        // Update cursor to today
+        // Trigger summary computation from raw data
+        computeEngine.processQueue()
+
         saveCursor(today)
         emitProgress("Sync complete: $startDate → $today")
     }
 
-    /**
-     * Quick sync: only syncs recent data (last 7 days).
-     * Used for periodic background sync after initial backfill.
-     */
     suspend fun syncRecent(days: Int = 7): Result<Unit> = runCatching {
         if (!fitbitAuth.tryRestoreTokens()) return@runCatching
 
@@ -110,6 +92,7 @@ class FitbitSyncManager @Inject constructor(
         syncExerciseLogs(startDate)
         syncSleepLogs(startDate, today)
         syncVitals(startDate, today)
+        computeEngine.processQueue()
         saveCursor(today)
     }
 
@@ -118,11 +101,7 @@ class FitbitSyncManager @Inject constructor(
     private suspend fun syncDailyAggregates(startDate: LocalDate, endDate: LocalDate) {
         if (!checkRateLimit()) return
         val nowMs = clock.now().toEpochMilliseconds()
-        val goals = buildGoalMap()
-        val start = startDate.toString()
-        val end = endDate.toString()
 
-        // Fetch in 180-day chunks (Fitbit API times out on large ranges)
         val chunks = dateChunks(startDate, endDate, 180)
         for ((idx, chunk) in chunks.withIndex()) {
             val (chunkStart, chunkEnd) = chunk
@@ -130,48 +109,52 @@ class FitbitSyncManager @Inject constructor(
             val e = chunkEnd.toString()
 
             emitProgress("Phase 1/4: Aggregates chunk ${idx + 1}/${chunks.size} ($s → $e)")
-            val rows = mutableListOf<DailyAggregateEntity>()
+            val rawRows = mutableListOf<RawDailyMetricEntity>()
+            val dirtyEntries = mutableListOf<ComputeQueueEntity>()
 
             // Steps
             val steps = fitbitClient.fetchStepsSeries(s, e)
             for (entry in steps) {
                 val value = entry.value.toDoubleOrNull() ?: continue
                 if (value > 0) {
-                    rows += DailyAggregateEntity(
-                        date = entry.dateTime, metric = MetricType.Steps.name,
-                        total = value, goal = goals[MetricType.Steps],
-                        sampleCount = 1, computedAtMs = nowMs,
+                    rawRows += RawDailyMetricEntity(
+                        date = entry.dateTime, metric = MetricType.Steps.name, source = "Fitbit",
+                        value = value, unit = "count",
+                        externalId = "fitbit-steps-${entry.dateTime}", ingestedAtMs = nowMs,
                     )
+                    dirtyEntries += ComputeQueueEntity(date = entry.dateTime, metric = MetricType.Steps.name, enqueuedAtMs = nowMs)
                 }
             }
 
-            // Distance (Fitbit returns miles by default for US accounts)
+            // Distance
             val distance = fitbitClient.fetchDistanceSeries(s, e)
             for (entry in distance) {
                 val miles = entry.value.toDoubleOrNull() ?: continue
                 if (miles > 0) {
-                    rows += DailyAggregateEntity(
-                        date = entry.dateTime, metric = MetricType.Distance.name,
-                        total = miles, goal = goals[MetricType.Distance],
-                        sampleCount = 1, computedAtMs = nowMs,
+                    rawRows += RawDailyMetricEntity(
+                        date = entry.dateTime, metric = MetricType.Distance.name, source = "Fitbit",
+                        value = miles, unit = "miles",
+                        externalId = "fitbit-distance-${entry.dateTime}", ingestedAtMs = nowMs,
                     )
+                    dirtyEntries += ComputeQueueEntity(date = entry.dateTime, metric = MetricType.Distance.name, enqueuedAtMs = nowMs)
                 }
             }
 
-            // Active calories (excludes BMR)
+            // Active calories
             val calories = fitbitClient.fetchActiveCaloriesSeries(s, e)
             for (entry in calories) {
                 val value = entry.value.toDoubleOrNull() ?: continue
                 if (value > 0) {
-                    rows += DailyAggregateEntity(
-                        date = entry.dateTime, metric = MetricType.ActiveCalories.name,
-                        total = value, goal = goals[MetricType.ActiveCalories],
-                        sampleCount = 1, computedAtMs = nowMs,
+                    rawRows += RawDailyMetricEntity(
+                        date = entry.dateTime, metric = MetricType.ActiveCalories.name, source = "Fitbit",
+                        value = value, unit = "kcal",
+                        externalId = "fitbit-activecal-${entry.dateTime}", ingestedAtMs = nowMs,
                     )
+                    dirtyEntries += ComputeQueueEntity(date = entry.dateTime, metric = MetricType.ActiveCalories.name, enqueuedAtMs = nowMs)
                 }
             }
 
-            // Zone minutes = fairly active + very active
+            // Zone minutes
             val fairly = fitbitClient.fetchFairlyActiveMinutes(s, e)
             val very = fitbitClient.fetchVeryActiveMinutes(s, e)
             val fairlyMap = fairly.associate { it.dateTime to (it.value.toIntOrNull() ?: 0) }
@@ -180,16 +163,18 @@ class FitbitSyncManager @Inject constructor(
             for (date in allDates) {
                 val totalMin = (fairlyMap[date] ?: 0) + (veryMap[date] ?: 0)
                 if (totalMin > 0) {
-                    rows += DailyAggregateEntity(
-                        date = date, metric = MetricType.ZoneMinutes.name,
-                        total = totalMin.toDouble(), goal = goals[MetricType.ZoneMinutes],
-                        sampleCount = 1, computedAtMs = nowMs,
+                    rawRows += RawDailyMetricEntity(
+                        date = date, metric = MetricType.ZoneMinutes.name, source = "Fitbit",
+                        value = totalMin.toDouble(), unit = "minutes",
+                        externalId = "fitbit-zoneminutes-$date", ingestedAtMs = nowMs,
                     )
+                    dirtyEntries += ComputeQueueEntity(date = date, metric = MetricType.ZoneMinutes.name, enqueuedAtMs = nowMs)
                 }
             }
 
-            Log.d(TAG, "Upserting ${rows.size} daily aggregate rows for $s → $e")
-            if (rows.isNotEmpty()) aggregateDao.upsert(rows)
+            Log.d(TAG, "Upserting ${rawRows.size} raw metric rows for $s → $e")
+            if (rawRows.isNotEmpty()) rawDailyDao.insertAll(rawRows)
+            if (dirtyEntries.isNotEmpty()) computeQueueDao.enqueue(dirtyEntries)
 
             if (!checkRateLimit()) return
         }
@@ -223,14 +208,12 @@ class FitbitSyncManager @Inject constructor(
         activity: FitbitActivity,
         zone: ZoneId,
     ): ExerciseSessionEntity? {
-        // Parse start time
         val startDateTime = try {
             LocalDateTime.parse(
                 "${activity.startDate}T${activity.startTime}",
                 DateTimeFormatter.ISO_LOCAL_DATE_TIME,
             )
         } catch (e: Exception) {
-            // Try with simpler format (HH:mm)
             try {
                 val parts = activity.startTime.split(":")
                 val hour = parts[0].toInt()
@@ -246,25 +229,21 @@ class FitbitSyncManager @Inject constructor(
         val startMs = startDateTime.atZone(zone).toInstant().toEpochMilli()
         val endMs = startMs + activity.duration
 
-        // Convert distance to meters
         val distanceMeters = when {
             activity.distance == null -> null
             activity.distanceUnit?.equals("Kilometer", ignoreCase = true) == true ->
                 activity.distance * 1000.0
-            else -> activity.distance * METERS_PER_MILE // Default: miles
+            else -> activity.distance * METERS_PER_MILE
         }
 
-        // Calculate max HR from heart rate zones
         val maxHr = activity.heartRateZones
             ?.filter { it.minutes > 0 }
             ?.maxOfOrNull { it.max }
 
-        // Calculate zone minutes from HR zones (Cardio + Peak zones)
         val zoneMinutes = activity.heartRateZones
             ?.filter { it.name == "Fat Burn" || it.name == "Cardio" || it.name == "Peak" }
             ?.sumOf { it.minutes }
 
-        // Calculate pace (seconds per mile)
         val avgPace = if (distanceMeters != null && distanceMeters > 0 && activity.duration > 0) {
             val miles = distanceMeters / METERS_PER_MILE
             ((activity.duration / 1000.0) / miles).toInt()
@@ -293,7 +272,6 @@ class FitbitSyncManager @Inject constructor(
     private suspend fun syncSleepLogs(startDate: LocalDate, endDate: LocalDate) {
         if (!checkRateLimit()) return
 
-        // Sleep API supports max 100 days per request
         val chunks = dateChunks(startDate, endDate, 100)
         for ((idx, chunk) in chunks.withIndex()) {
             val (chunkStart, chunkEnd) = chunk
@@ -345,57 +323,58 @@ class FitbitSyncManager @Inject constructor(
         if (!checkRateLimit()) return
         val nowMs = clock.now().toEpochMilliseconds()
 
-        // Resting heart rate — max 30 days per request
+        // Resting heart rate
         emitProgress("Phase 4/4: Resting HR...")
         val hrChunks = dateChunks(startDate, endDate, 30)
-        val hrRows = mutableListOf<DailyAggregateEntity>()
+        val hrRaw = mutableListOf<RawDailyMetricEntity>()
+        val hrDirty = mutableListOf<ComputeQueueEntity>()
         for ((idx, chunk) in hrChunks.withIndex()) {
             val (cs, ce) = chunk
             emitProgress("Phase 4/4: HR chunk ${idx + 1}/${hrChunks.size}")
             val hrData = fitbitClient.fetchHeartRate(cs.toString(), ce.toString())
             for (entry in hrData) {
                 val rhr = entry.value.restingHeartRate ?: continue
-                hrRows += DailyAggregateEntity(
-                    date = entry.dateTime, metric = MetricType.RestingHeartRate.name,
-                    total = rhr.toDouble(), goal = null,
-                    sampleCount = 1, computedAtMs = nowMs,
+                hrRaw += RawDailyMetricEntity(
+                    date = entry.dateTime, metric = MetricType.RestingHeartRate.name, source = "Fitbit",
+                    value = rhr.toDouble(), unit = "bpm",
+                    externalId = "fitbit-rhr-${entry.dateTime}", ingestedAtMs = nowMs,
                 )
+                hrDirty += ComputeQueueEntity(date = entry.dateTime, metric = MetricType.RestingHeartRate.name, enqueuedAtMs = nowMs)
             }
             if (!checkRateLimit()) break
         }
-        if (hrRows.isNotEmpty()) {
-            Log.d(TAG, "Upserting ${hrRows.size} resting HR entries")
-            aggregateDao.upsert(hrRows)
-        }
+        if (hrRaw.isNotEmpty()) rawDailyDao.insertAll(hrRaw)
+        if (hrDirty.isNotEmpty()) computeQueueDao.enqueue(hrDirty)
 
         if (!checkRateLimit()) return
 
-        // Weight & body fat — max 31 days per request
+        // Weight & body fat
         emitProgress("Phase 4/4: Weight & body fat...")
         val weightChunks = dateChunks(startDate, endDate, 31)
-        val bodyRows = mutableListOf<DailyAggregateEntity>()
+        val bodyRaw = mutableListOf<RawDailyMetricEntity>()
+        val bodyDirty = mutableListOf<ComputeQueueEntity>()
         for ((cs, ce) in weightChunks) {
             val weightData = fitbitClient.fetchWeight(cs.toString(), ce.toString())
             for (log in weightData) {
-                bodyRows += DailyAggregateEntity(
-                    date = log.date, metric = MetricType.Weight.name,
-                    total = log.weight, goal = null,
-                    sampleCount = 1, computedAtMs = nowMs,
+                bodyRaw += RawDailyMetricEntity(
+                    date = log.date, metric = MetricType.Weight.name, source = "Fitbit",
+                    value = log.weight * KG_TO_LBS, unit = "lbs",
+                    externalId = "fitbit-weight-${log.date}", ingestedAtMs = nowMs,
                 )
+                bodyDirty += ComputeQueueEntity(date = log.date, metric = MetricType.Weight.name, enqueuedAtMs = nowMs)
                 log.fat?.let { fatPct ->
-                    bodyRows += DailyAggregateEntity(
-                        date = log.date, metric = MetricType.BodyFat.name,
-                        total = fatPct, goal = null,
-                        sampleCount = 1, computedAtMs = nowMs,
+                    bodyRaw += RawDailyMetricEntity(
+                        date = log.date, metric = MetricType.BodyFat.name, source = "Fitbit",
+                        value = fatPct, unit = "percent",
+                        externalId = "fitbit-bodyfat-${log.date}", ingestedAtMs = nowMs,
                     )
+                    bodyDirty += ComputeQueueEntity(date = log.date, metric = MetricType.BodyFat.name, enqueuedAtMs = nowMs)
                 }
             }
             if (!checkRateLimit()) break
         }
-        if (bodyRows.isNotEmpty()) {
-            Log.d(TAG, "Upserting ${bodyRows.size} weight/body fat entries")
-            aggregateDao.upsert(bodyRows)
-        }
+        if (bodyRaw.isNotEmpty()) rawDailyDao.insertAll(bodyRaw)
+        if (bodyDirty.isNotEmpty()) computeQueueDao.enqueue(bodyDirty)
     }
 
     // ---- Helpers ----
@@ -407,19 +386,6 @@ class FitbitSyncManager @Inject constructor(
             return false
         }
         return true
-    }
-
-    private suspend fun buildGoalMap(): Map<MetricType, Double?> {
-        val goals = goalDao.getAll()
-        val goalMap = goals.associate {
-            runCatching { MetricType.valueOf(it.metric) }.getOrNull() to it.target
-        }.filterKeys { it != null }.mapKeys { it.key!! }
-        return mapOf(
-            MetricType.Steps to (goalMap[MetricType.Steps] ?: 10_000.0),
-            MetricType.Distance to (goalMap[MetricType.Distance] ?: 5.0),
-            MetricType.ActiveCalories to (goalMap[MetricType.ActiveCalories] ?: 2_500.0),
-            MetricType.ZoneMinutes to (goalMap[MetricType.ZoneMinutes] ?: 22.0),
-        )
     }
 
     private suspend fun loadCursor(): LocalDate? {
@@ -443,7 +409,6 @@ class FitbitSyncManager @Inject constructor(
             dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
         } catch (e: Exception) {
             try {
-                // Try with offset
                 java.time.OffsetDateTime.parse(dateTimeStr).toInstant().toEpochMilli()
             } catch (e2: Exception) {
                 Log.w(TAG, "Cannot parse datetime: $dateTimeStr")
@@ -452,7 +417,6 @@ class FitbitSyncManager @Inject constructor(
         }
     }
 
-    /** Split a date range into chunks of at most [maxDays] days. */
     private fun dateChunks(
         start: LocalDate,
         end: LocalDate,

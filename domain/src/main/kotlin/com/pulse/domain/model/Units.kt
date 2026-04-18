@@ -11,6 +11,7 @@ sealed interface MeasurementUnit {
     data object Floors : MeasurementUnit
     data object MetersPerSecond : MeasurementUnit
     data object Kilograms : MeasurementUnit
+    data object Pounds : MeasurementUnit
     data object Percent : MeasurementUnit
     data object Celsius : MeasurementUnit
     data object Milliseconds : MeasurementUnit
@@ -20,6 +21,7 @@ sealed interface MeasurementUnit {
 enum class DataSource {
     HealthConnect,
     GoogleHealth,
+    Fitbit,
     Manual,
     Seeded,
 }

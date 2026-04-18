@@ -139,7 +139,6 @@ class DashboardViewModel @Inject constructor(
                     val date = _state.value.selectedDate
                     val range = DateRange(date.minus(DatePeriod(days = 90)), date)
                     runCatching { health.refreshFromHealthConnect(range) }
-                    runCatching { forceSync() }
                     _state.update { it.copy(isRefreshing = false) }
                 }
             }
@@ -157,7 +156,6 @@ class DashboardViewModel @Inject constructor(
                 val date = _state.value.selectedDate
                 val range = DateRange(date.minus(DatePeriod(days = 90)), date)
                 runCatching { health.refreshFromHealthConnect(range) }
-                forceSync()
             }
             DashboardIntent.RequestPermissions -> _effects.trySend(DashboardEffect.RequestHealthConnectPermissions)
             is DashboardIntent.PermissionsResult -> _state.update { it.copy(permissionsGranted = intent.granted) }

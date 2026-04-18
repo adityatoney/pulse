@@ -18,9 +18,9 @@ class PulseApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         syncScheduler.cancelLegacyWorker()
-        syncScheduler.scheduleImmediateSync()
-        syncScheduler.scheduleHistoryBackfill()
-        syncScheduler.schedulePeriodic()
+        // Note: HC sync is triggered from MainActivity.onResume (foreground required).
+        // WorkManager-based HC sync (ImmediateSync, periodic) fails on Android 14+
+        // without READ_HEALTH_DATA_IN_BACKGROUND permission.
         backupRestoreInitializer.checkAndRestore()
     }
 

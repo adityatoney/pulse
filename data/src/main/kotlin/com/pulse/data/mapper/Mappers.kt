@@ -1,7 +1,7 @@
 package com.pulse.data.mapper
 
-import com.pulse.data.local.entity.DailyAggregateEntity
 import com.pulse.data.local.entity.ExerciseSessionEntity
+import com.pulse.data.local.entity.SummaryDailyMetricEntity
 import com.pulse.domain.model.DailyAggregate
 import com.pulse.domain.model.DataSource
 import com.pulse.domain.model.ExerciseSession
@@ -9,7 +9,7 @@ import com.pulse.domain.model.MetricType
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 
-fun DailyAggregateEntity.toDomain(): DailyAggregate = DailyAggregate(
+fun SummaryDailyMetricEntity.toDomain(): DailyAggregate = DailyAggregate(
     date = LocalDate.parse(date),
     metric = MetricType.valueOf(metric),
     total = total,
@@ -17,17 +17,6 @@ fun DailyAggregateEntity.toDomain(): DailyAggregate = DailyAggregate(
     sampleCount = sampleCount,
     computedAt = Instant.fromEpochMilliseconds(computedAtMs),
 )
-
-fun DailyAggregate.toEntity(dirty: Boolean = true): DailyAggregateEntity =
-    DailyAggregateEntity(
-        date = date.toString(),
-        metric = metric.name,
-        total = total,
-        goal = goal,
-        sampleCount = sampleCount,
-        computedAtMs = computedAt.toEpochMilliseconds(),
-        dirty = dirty,
-    )
 
 fun ExerciseSessionEntity.toDomain(): ExerciseSession = ExerciseSession(
     id = id,

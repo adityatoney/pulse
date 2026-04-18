@@ -52,6 +52,7 @@ sealed interface DebugMenuIntent {
     data object FitbitSignIn : DebugMenuIntent
     data object FitbitSignOut : DebugMenuIntent
     data object ForceFitbitSync : DebugMenuIntent
+    data object ExportBackup : DebugMenuIntent
     data object Dismiss : DebugMenuIntent
 }
 

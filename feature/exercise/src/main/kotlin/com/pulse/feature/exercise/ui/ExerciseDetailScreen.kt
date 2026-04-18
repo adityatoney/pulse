@@ -407,11 +407,11 @@ private fun GoogleMapsRouteSection(route: List<RoutePoint>, hrSamples: List<HrSa
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            ZoneLegendDot(Zone1VeryLight, "Z1")
-            ZoneLegendDot(Zone2Light, "Z2")
-            ZoneLegendDot(Zone3Moderate, "Z3")
-            ZoneLegendDot(Zone4Vigorous, "Z4")
-            ZoneLegendDot(Zone5Peak, "Z5")
+            ZoneLegendDot(Zone1VeryLight, "Below")
+            ZoneLegendDot(Zone2Light, "Light")
+            ZoneLegendDot(Zone3Moderate, "Moderate")
+            ZoneLegendDot(Zone4Vigorous, "Vigorous")
+            ZoneLegendDot(Zone5Peak, "Peak")
         }
     }
 }
@@ -604,15 +604,15 @@ private fun HrZonesCard(samples: List<HrSample>, sessionStart: Instant, sessionE
 
             // Legend
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                ZoneLegendDot(Zone1VeryLight, "Z1")
+                ZoneLegendDot(Zone1VeryLight, "Below")
                 Spacer(Modifier.width(10.dp))
-                ZoneLegendDot(Zone2Light, "Z2")
+                ZoneLegendDot(Zone2Light, "Light")
                 Spacer(Modifier.width(10.dp))
-                ZoneLegendDot(Zone3Moderate, "Z3")
+                ZoneLegendDot(Zone3Moderate, "Moderate")
                 Spacer(Modifier.width(10.dp))
-                ZoneLegendDot(Zone4Vigorous, "Z4")
+                ZoneLegendDot(Zone4Vigorous, "Vigorous")
                 Spacer(Modifier.width(10.dp))
-                ZoneLegendDot(Zone5Peak, "Z5")
+                ZoneLegendDot(Zone5Peak, "Peak")
             }
 
             Spacer(Modifier.height(24.dp))

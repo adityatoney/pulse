@@ -50,16 +50,17 @@ class DriveBackupManager @Inject constructor(
         // 1. Read all tables
         val payload = withContext(Dispatchers.IO) {
             BackupPayload(
-                version = 1,
+                version = 2,
                 dbVersion = PulseDatabase.VERSION,
                 appVersion = "1.0.0",
                 createdAtMs = clock.now().toEpochMilliseconds(),
-                dailyAggregates = db.dailyAggregateDao().getAll(),
+                rawDailyMetrics = db.rawDailyMetricDao().getAll(),
+                rawSamples = db.rawSampleDao().getAll(),
+                summaryDailyMetrics = db.summaryDailyMetricDao().getAll(),
                 exerciseSessions = db.exerciseSessionDao().getAll(),
                 exerciseHrSamples = db.exerciseHrSampleDao().getAll(),
                 exerciseLaps = db.exerciseLapDao().getAll(),
                 exerciseRoutePoints = db.exerciseRoutePointDao().getAll(),
-                healthSamples = db.healthSampleDao().getAll(),
                 sleepSessions = db.sleepSessionDao().getAll(),
                 syncState = db.syncStateDao().getAll(),
                 goals = db.goalDao().getAll(),
@@ -141,32 +142,36 @@ class DriveBackupManager @Inject constructor(
         // 3. Clear and repopulate all tables (parent tables before children for FK ordering)
         withContext(Dispatchers.IO) {
             db.exerciseSessionDao().clear() // cascades to hr_samples, laps, route_points
-            db.dailyAggregateDao().clear()
-            db.healthSampleDao().clear()
+            db.rawDailyMetricDao().clear()
+            db.rawSampleDao().clear()
+            db.summaryDailyMetricDao().clear()
             db.sleepSessionDao().clear()
             db.syncStateDao().clear()
+            db.computeQueueDao().clear()
 
-            db.dailyAggregateDao().upsert(payload.dailyAggregates)
+            db.rawDailyMetricDao().insertAll(payload.rawDailyMetrics)
+            db.rawSampleDao().insertAll(payload.rawSamples)
+            db.summaryDailyMetricDao().upsert(payload.summaryDailyMetrics)
             db.exerciseSessionDao().upsert(payload.exerciseSessions)
             db.exerciseHrSampleDao().insertAll(payload.exerciseHrSamples)
             db.exerciseLapDao().insertAll(payload.exerciseLaps)
             db.exerciseRoutePointDao().insertAll(payload.exerciseRoutePoints)
-            db.healthSampleDao().upsert(payload.healthSamples)
             db.sleepSessionDao().upsert(payload.sleepSessions)
             payload.syncState.forEach { db.syncStateDao().upsert(it) }
             payload.goals.forEach { db.goalDao().upsert(it) }
         }
 
-        val totalRecords = payload.dailyAggregates.size + payload.exerciseSessions.size +
+        val totalRecords = payload.rawDailyMetrics.size + payload.rawSamples.size +
+            payload.summaryDailyMetrics.size + payload.exerciseSessions.size +
             payload.exerciseHrSamples.size + payload.exerciseLaps.size +
-            payload.exerciseRoutePoints.size + payload.healthSamples.size +
+            payload.exerciseRoutePoints.size +
             payload.sleepSessions.size + payload.syncState.size + payload.goals.size
         Log.d(TAG, "Restore complete: $totalRecords records")
         totalRecords
     }
 
     suspend fun isDatabaseEmpty(): Boolean {
-        val steps = db.dailyAggregateDao().stepDayCount()
+        val steps = db.summaryDailyMetricDao().stepDayCount()
         val exercises = db.exerciseSessionDao().totalCount()
         val sleeps = db.sleepSessionDao().totalCount()
         return steps == 0 && exercises == 0 && sleeps == 0

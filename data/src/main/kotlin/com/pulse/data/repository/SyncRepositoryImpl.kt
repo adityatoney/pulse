@@ -4,7 +4,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
-import com.pulse.data.local.dao.DailyAggregateDao
+import com.pulse.data.local.dao.SummaryDailyMetricDao
 import com.pulse.data.work.ImmediateSyncWorker
 import com.pulse.domain.model.SyncOutcome
 import com.pulse.domain.model.SyncPhase
@@ -18,25 +18,25 @@ import javax.inject.Singleton
 
 @Singleton
 class SyncRepositoryImpl @Inject constructor(
-    private val aggregateDao: DailyAggregateDao,
+    private val summaryDao: SummaryDailyMetricDao,
     private val workManager: WorkManager,
 ) : SyncRepository {
 
     override fun observeStatus(): Flow<SyncStatus> = flow {
-        val latestMs = aggregateDao.latestComputedAtMs()
+        val latestMs = summaryDao.latestComputedAtMs()
         val lastSyncedAt = latestMs?.let { Instant.fromEpochMilliseconds(it) }
         emit(
             SyncStatus(
                 lastSyncedAt = lastSyncedAt,
                 state = SyncPhase.Idle,
-                pendingItems = aggregateDao.dirtyCount(),
+                pendingItems = summaryDao.dirtyCount(),
                 lastError = null,
             )
         )
     }
 
     override suspend fun pushPending(): SyncOutcome {
-        val dirty = aggregateDao.dirty(limit = 100)
+        val dirty = summaryDao.dirty(limit = 100)
         if (dirty.isEmpty()) return SyncOutcome.NoOp
         return SyncOutcome.Ok(dirty.size)
     }
@@ -46,6 +46,7 @@ class SyncRepositoryImpl @Inject constructor(
     override suspend fun forceSyncNow(): SyncOutcome {
         val req = OneTimeWorkRequestBuilder<ImmediateSyncWorker>()
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .setInputData(ImmediateSyncWorker.forceFullFetchData())
             .addTag(ImmediateSyncWorker.TAG)
             .build()
         workManager.enqueueUniqueWork("health-sync-now", ExistingWorkPolicy.REPLACE, req)

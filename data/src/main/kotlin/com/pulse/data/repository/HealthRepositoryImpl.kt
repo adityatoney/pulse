@@ -1,14 +1,17 @@
 package com.pulse.data.repository
 
 import android.util.Log
+import com.pulse.data.compute.SummaryComputeEngine
 import com.pulse.data.health.HealthConnectDataSource
 import com.pulse.data.sync.EnhancedHealthSyncManager
-import com.pulse.data.local.dao.DailyAggregateDao
+import com.pulse.data.local.dao.ComputeQueueDao
 import com.pulse.data.local.dao.ExerciseSessionDao
 import com.pulse.data.local.dao.GoalDao
-import com.pulse.data.local.dao.HealthSampleDao
-import com.pulse.data.local.dao.SleepSessionDao
-import com.pulse.data.local.entity.DailyAggregateEntity
+import com.pulse.data.local.dao.RawDailyMetricDao
+import com.pulse.data.local.dao.SummaryDailyMetricDao
+import com.pulse.data.local.entity.ComputeQueueEntity
+import com.pulse.data.local.entity.RawDailyMetricEntity
+import com.pulse.data.local.entity.SummaryDailyMetricEntity
 import com.pulse.data.mapper.toDomain
 import com.pulse.domain.model.Aggregation
 import com.pulse.domain.model.DailyAggregate
@@ -55,13 +58,15 @@ class HealthRepositoryImpl @Inject constructor(
     private val hc: HealthConnectDataSource,
     private val cloudApi: com.pulse.data.cloud.GoogleHealthRemoteDataSource,
     private val syncManager: EnhancedHealthSyncManager,
-    private val aggregateDao: DailyAggregateDao,
+    private val computeEngine: SummaryComputeEngine,
+    private val summaryDao: SummaryDailyMetricDao,
+    private val rawDailyDao: RawDailyMetricDao,
+    private val computeQueueDao: ComputeQueueDao,
     private val exerciseDao: ExerciseSessionDao,
     private val hrSampleDao: com.pulse.data.local.dao.ExerciseHrSampleDao,
     private val lapDao: com.pulse.data.local.dao.ExerciseLapDao,
     private val routePointDao: com.pulse.data.local.dao.ExerciseRoutePointDao,
-    private val sleepDao: SleepSessionDao,
-    private val sampleDao: HealthSampleDao,
+    private val sleepDao: com.pulse.data.local.dao.SleepSessionDao,
     private val goalDao: GoalDao,
     private val clock: Clock,
 ) : HealthRepository {
@@ -71,21 +76,22 @@ class HealthRepositoryImpl @Inject constructor(
         val goalsFlow = goalDao.observeAll().map { rows ->
             rows.associate { it.metric to it.target }
         }
+        // Simplified: summary table already has the right values based on user prefs
         val dataFlow = combine(
-            aggregateDao.observe(key, MetricType.Steps.name),
-            aggregateDao.observe(key, MetricType.Distance.name),
-            aggregateDao.observe(key, MetricType.ActiveCalories.name),
-            aggregateDao.observe(key, MetricType.ZoneMinutes.name),
+            summaryDao.observe(key, MetricType.Steps.name),
+            summaryDao.observe(key, MetricType.Distance.name),
+            summaryDao.observe(key, MetricType.ActiveCalories.name),
+            summaryDao.observe(key, MetricType.ZoneMinutes.name),
             observeSleep(date),
         ) { steps, dist, cals, zmin, sleep ->
-            DataTuple(steps, dist, cals, zmin, sleep)
+            DataTuple(steps = steps, dist = dist, cals = cals, zmin = zmin, sleep = sleep)
         }
         return combine(goalsFlow, dataFlow) { goals, data ->
             val stepGoal = goals[MetricType.Steps.name] ?: DEFAULT_STEP_GOAL
             val distGoal = goals[MetricType.Distance.name] ?: DEFAULT_DISTANCE_GOAL_MI
             val calGoal = goals[MetricType.ActiveCalories.name] ?: DEFAULT_CALORIE_GOAL
             val zmGoal = goals[MetricType.ZoneMinutes.name] ?: DEFAULT_ZONE_MIN_GOAL
-            Log.d("PulseGoals", "date=$key goals=$goals → steps=$stepGoal dist=$distGoal cal=$calGoal zm=$zmGoal")
+
             TodaySummary(
                 today = TodayMetrics(
                     steps = buildInt(data.steps, stepGoal, "steps"),
@@ -99,15 +105,15 @@ class HealthRepositoryImpl @Inject constructor(
     }
 
     private data class DataTuple(
-        val steps: DailyAggregateEntity?,
-        val dist: DailyAggregateEntity?,
-        val cals: DailyAggregateEntity?,
-        val zmin: DailyAggregateEntity?,
+        val steps: SummaryDailyMetricEntity?,
+        val dist: SummaryDailyMetricEntity?,
+        val cals: SummaryDailyMetricEntity?,
+        val zmin: SummaryDailyMetricEntity?,
         val sleep: SleepSummary?,
     )
 
     override fun observeDailyAggregate(date: LocalDate, metric: MetricType): Flow<DailyAggregate> =
-        aggregateDao.observe(date.toString(), metric.name).map { entity ->
+        summaryDao.observe(date.toString(), metric.name).map { entity ->
             entity?.toDomain() ?: DailyAggregate(
                 date = date,
                 metric = metric,
@@ -123,23 +129,23 @@ class HealthRepositoryImpl @Inject constructor(
         range: DateRange,
         bucket: Bucket,
     ): Flow<MetricSeries> {
+        // No more pref-based branching — summary table has the right value
         return when (bucket) {
             Bucket.Hour -> observeHourlySeries(metric, range)
-            Bucket.Day -> observeDailySeriesFromAggregates(metric, range)
-            Bucket.Week -> observeWeeklySeriesFromAggregates(metric, range)
-            Bucket.Month -> observeMonthlySeriesFromAggregates(metric, range)
+            Bucket.Day -> observeDailySeriesFromSummary(metric, range)
+            Bucket.Week -> observeWeeklySeriesFromSummary(metric, range)
+            Bucket.Month -> observeMonthlySeriesFromSummary(metric, range)
         }
     }
 
-    private fun observeDailySeriesFromAggregates(
+    private fun observeDailySeriesFromSummary(
         metric: MetricType,
         range: DateRange,
     ): Flow<MetricSeries> {
         val zone = TimeZone.currentSystemDefault()
-        return aggregateDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
+        return summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
             .map { rows ->
                 val rowMap = rows.associateBy { it.date }
-                // Build a point per day across the full range
                 var d = range.start
                 val points = mutableListOf<SeriesPoint>()
                 while (d <= range.endInclusive) {
@@ -160,23 +166,21 @@ class HealthRepositoryImpl @Inject constructor(
             }
     }
 
-    private fun observeWeeklySeriesFromAggregates(
+    private fun observeWeeklySeriesFromSummary(
         metric: MetricType,
         range: DateRange,
     ): Flow<MetricSeries> {
-        return aggregateDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
+        return summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
             .map { rows ->
                 val rowMap = rows.associateBy { it.date }
-                // Build daily data, then group by ISO week (Monday-Sunday)
-                val dailyEntries = mutableListOf<Pair<LocalDate, com.pulse.data.local.entity.DailyAggregateEntity?>>()
+                val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
                 var d = range.start
                 while (d <= range.endInclusive) {
                     dailyEntries += d to rowMap[d.toString()]
                     d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
                 }
-                // Group by the Monday of each date's ISO week
                 val grouped = dailyEntries.groupBy { (date, _) ->
-                    val dow = date.dayOfWeek.ordinal // Monday=0
+                    val dow = date.dayOfWeek.ordinal
                     date.minus(kotlinx.datetime.DatePeriod(days = dow))
                 }
                 val points = grouped.toSortedMap().map { (monday, entries) ->
@@ -188,30 +192,23 @@ class HealthRepositoryImpl @Inject constructor(
                         goal = goal,
                     )
                 }
-                MetricSeries(
-                    metric = metric,
-                    range = range,
-                    aggregation = Aggregation.Sum,
-                    points = points,
-                )
+                MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
             }
     }
 
-    private fun observeMonthlySeriesFromAggregates(
+    private fun observeMonthlySeriesFromSummary(
         metric: MetricType,
         range: DateRange,
     ): Flow<MetricSeries> {
-        return aggregateDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
+        return summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
             .map { rows ->
                 val rowMap = rows.associateBy { it.date }
-                // Build daily data, then group by calendar month
-                val dailyEntries = mutableListOf<Pair<LocalDate, com.pulse.data.local.entity.DailyAggregateEntity?>>()
+                val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
                 var d = range.start
                 while (d <= range.endInclusive) {
                     dailyEntries += d to rowMap[d.toString()]
                     d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
                 }
-                // Group by year-month, bucket start = first day of that month
                 val grouped = dailyEntries.groupBy { (date, _) ->
                     LocalDate(date.year, date.monthNumber, 1)
                 }
@@ -224,19 +221,10 @@ class HealthRepositoryImpl @Inject constructor(
                         goal = goal,
                     )
                 }
-                MetricSeries(
-                    metric = metric,
-                    range = range,
-                    aggregation = Aggregation.Sum,
-                    points = points,
-                )
+                MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
             }
     }
 
-    /**
-     * For Day view: builds 24 hourly buckets (0-23) using exercise session data.
-     * Each bucket shows activity that occurred during that hour.
-     */
     private fun observeHourlySeries(
         metric: MetricType,
         range: DateRange,
@@ -252,7 +240,7 @@ class HealthRepositoryImpl @Inject constructor(
                 hourly[hour] += when (metric) {
                     MetricType.Distance -> (s.distanceMeters ?: 0.0) / METERS_PER_MILE
                     MetricType.Calories, MetricType.ActiveCalories -> s.calories ?: 0.0
-                    MetricType.Steps -> s.distanceMeters?.let { it / 0.762 } ?: 0.0 // ~steps from distance
+                    MetricType.Steps -> s.distanceMeters?.let { it / 0.762 } ?: 0.0
                     else -> s.calories ?: 0.0
                 }
             }
@@ -282,7 +270,6 @@ class HealthRepositoryImpl @Inject constructor(
         val entity = exerciseDao.findById(sessionId) ?: return null
         val session = entity.toDomain()
 
-        // Load HR samples from local cache; if empty, try fetching from HC
         var hrEntities = hrSampleDao.forSession(sessionId)
         if (hrEntities.isEmpty() && hc.isAvailable()) {
             val start = java.time.Instant.ofEpochMilli(entity.startUtcMs)
@@ -304,17 +291,13 @@ class HealthRepositoryImpl @Inject constructor(
 
         val lapEntities = lapDao.forSession(sessionId)
 
-        // Load route points from local cache; if empty, try fetching from HC
         var routeEntities = routePointDao.forSession(sessionId)
         var routeConsentRequired = false
-        android.util.Log.d("Health", "Route: cached=${routeEntities.size} for session=$sessionId")
         if (routeEntities.isEmpty() && hc.isAvailable()) {
             val rtStart = java.time.Instant.ofEpochMilli(entity.startUtcMs)
             val rtEnd = java.time.Instant.ofEpochMilli(entity.endUtcMs)
-            android.util.Log.d("Health", "Route: fetching from HC, range=$rtStart..$rtEnd")
             when (val routeResult = hc.readExerciseRoute(rtStart, rtEnd, sessionId)) {
                 is com.pulse.data.health.HealthConnectDataSource.RouteResult.Success -> {
-                    android.util.Log.d("Health", "Route: HC returned ${routeResult.locations.size} points")
                     val routePointEntities = routeResult.locations.map { loc ->
                         com.pulse.data.local.entity.ExerciseRoutePointEntity(
                             sessionId = sessionId,
@@ -331,16 +314,12 @@ class HealthRepositoryImpl @Inject constructor(
                     }
                 }
                 is com.pulse.data.health.HealthConnectDataSource.RouteResult.ConsentRequired -> {
-                    android.util.Log.w("Health", "Route: CONSENT REQUIRED for session $sessionId")
                     routeConsentRequired = true
                 }
-                is com.pulse.data.health.HealthConnectDataSource.RouteResult.NoData -> {
-                    android.util.Log.d("Health", "Route: NO DATA from HC for session $sessionId")
-                }
+                is com.pulse.data.health.HealthConnectDataSource.RouteResult.NoData -> {}
             }
         }
 
-        // Compute zone minutes on demand if missing but HR samples are available
         var zoneMinutes = entity.zoneMinutes
         if (zoneMinutes == null && hrEntities.isNotEmpty()) {
             val zone = ZoneId.systemDefault()
@@ -355,7 +334,6 @@ class HealthRepositoryImpl @Inject constructor(
             }
             val breakdown = ZoneMinuteCalculator.calculate(zmSamples, restingHr, age = 45)
             zoneMinutes = breakdown.total
-            // Persist so future loads don't recompute
             if (zoneMinutes > 0) {
                 exerciseDao.updateZoneMinutes(sessionId, zoneMinutes)
             }
@@ -403,8 +381,6 @@ class HealthRepositoryImpl @Inject constructor(
     }
 
     override fun observeSleep(date: LocalDate): Flow<SleepSummary?> {
-        // Sleep for "date" means the session ending on that morning.
-        // Use noon-to-noon window: noon of previous day to noon of target day.
         val noonPrevMs = date.atStartOfDayMillis() - 12 * 60 * 60 * 1000L
         val noonMs = date.atStartOfDayMillis() + 12 * 60 * 60 * 1000L
         return sleepDao.observeLatestForDate(noonPrevMs, noonMs).map { entity ->
@@ -420,6 +396,10 @@ class HealthRepositoryImpl @Inject constructor(
                 )
             }
         }
+    }
+
+    override suspend fun recomputeAggregates(days: Int) {
+        computeEngine.recomputeAll(days)
     }
 
     override suspend fun refreshFromHealthConnect(range: DateRange): Result<Unit> {
@@ -442,108 +422,77 @@ class HealthRepositoryImpl @Inject constructor(
         if (!cloudApi.isAvailable) return@runCatching
 
         val nowMs = clock.now().toEpochMilliseconds()
-        val goals = buildGoalMap()
-        val rows = mutableListOf<DailyAggregateEntity>()
+        val rawRows = mutableListOf<RawDailyMetricEntity>()
+        val dirtyEntries = mutableListOf<ComputeQueueEntity>()
 
-        // Steps — overwrites HC data with reconciled values
-        cloudApi.reconcileSteps(range).forEach { (date, steps) ->
-            rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.Steps.name,
-                total = steps.toDouble(), goal = goals[MetricType.Steps] ?: DEFAULT_STEP_GOAL,
-                sampleCount = 1, computedAtMs = nowMs, dirty = true,
+        fun addRaw(date: LocalDate, metric: MetricType, value: Double, unit: String) {
+            val dateStr = date.toString()
+            rawRows += RawDailyMetricEntity(
+                date = dateStr, metric = metric.name, source = "GoogleHealth",
+                value = value, unit = unit,
+                externalId = "gh-${metric.name.lowercase()}-$dateStr", ingestedAtMs = nowMs,
             )
+            dirtyEntries += ComputeQueueEntity(date = dateStr, metric = metric.name, enqueuedAtMs = nowMs)
         }
 
-        // Distance — REST returns millimeters, convert to miles
+        cloudApi.reconcileSteps(range).forEach { (date, steps) ->
+            addRaw(date, MetricType.Steps, steps.toDouble(), "count")
+        }
         cloudApi.reconcileDistance(range).forEach { (date, mm) ->
             val miles = mm / 1000.0 / METERS_PER_MILE
-            rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.Distance.name,
-                total = miles, goal = goals[MetricType.Distance] ?: DEFAULT_DISTANCE_GOAL_MI,
-                sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            addRaw(date, MetricType.Distance, miles, "miles")
         }
-
-        // Calories
         cloudApi.reconcileCalories(range).forEach { (date, cals) ->
-            rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.ActiveCalories.name,
-                total = cals, goal = goals[MetricType.ActiveCalories] ?: DEFAULT_CALORIE_GOAL,
-                sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            addRaw(date, MetricType.ActiveCalories, cals, "kcal")
         }
-
-        // Zone Minutes
         cloudApi.reconcileZoneMinutes(range).forEach { (date, mins) ->
-            rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.ZoneMinutes.name,
-                total = mins.toDouble(), goal = goals[MetricType.ZoneMinutes] ?: DEFAULT_ZONE_MIN_GOAL,
-                sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            addRaw(date, MetricType.ZoneMinutes, mins.toDouble(), "minutes")
         }
-
-        // Body metrics
         cloudApi.reconcileWeight(range).forEach { (date, kg) ->
-            if (kg > 0) rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.Weight.name,
-                total = kg, goal = 0.0, sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            if (kg > 0) addRaw(date, MetricType.Weight, kg * 2.20462, "lbs")
         }
-
         cloudApi.reconcileHrv(range).forEach { (date, ms) ->
-            if (ms > 0) rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.HRV.name,
-                total = ms, goal = 0.0, sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            if (ms > 0) addRaw(date, MetricType.HRV, ms, "ms")
         }
-
         cloudApi.reconcileSpO2(range).forEach { (date, pct) ->
-            if (pct > 0) rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.SpO2.name,
-                total = pct, goal = 0.0, sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            if (pct > 0) addRaw(date, MetricType.SpO2, pct, "percent")
         }
-
         cloudApi.reconcileRestingHr(range).forEach { (date, bpm) ->
-            if (bpm > 0) rows += DailyAggregateEntity(
-                date = date.toString(), metric = MetricType.RestingHeartRate.name,
-                total = bpm, goal = 0.0, sampleCount = 1, computedAtMs = nowMs, dirty = true,
-            )
+            if (bpm > 0) addRaw(date, MetricType.RestingHeartRate, bpm, "bpm")
         }
 
-        if (rows.isNotEmpty()) {
-            aggregateDao.upsert(rows)
+        if (rawRows.isNotEmpty()) {
+            rawDailyDao.insertAll(rawRows)
+            computeQueueDao.enqueue(dirtyEntries)
+            computeEngine.processQueue()
         }
     }
 
     override suspend fun dumpRawRecords(date: LocalDate): List<HealthMetric> {
-        // For now just return whatever's in the health_samples table for the day.
-        val startMs = date.atStartOfDayMillis()
-        val endMs = startMs + 24 * 60 * 60 * 1000L
-        return sampleDao.dump(startMs, endMs).map {
-            HealthMetric(
-                id = it.id,
-                type = runCatching { MetricType.valueOf(it.type) }.getOrDefault(MetricType.Steps),
-                value = it.value,
-                unit = unitOf(it.unit),
-                start = Instant.fromEpochMilliseconds(it.startUtcMs),
-                end = Instant.fromEpochMilliseconds(it.endUtcMs),
-                source = runCatching { DataSource.valueOf(it.source) }.getOrDefault(DataSource.HealthConnect),
-            )
+        // Read from raw_daily_metrics for the given date
+        val dateStr = date.toString()
+        val rawMetrics = rawDailyDao.getForDateAndMetric(dateStr, "%") // This won't work with LIKE
+        // Fallback: read all metrics for the date by iterating known types
+        val allRaw = mutableListOf<HealthMetric>()
+        for (type in MetricType.entries) {
+            val rows = rawDailyDao.getForDateAndMetric(dateStr, type.name)
+            for (row in rows) {
+                allRaw += HealthMetric(
+                    id = row.externalId ?: "${row.date}-${row.metric}-${row.source}",
+                    type = type,
+                    value = row.value,
+                    unit = unitOf(row.unit),
+                    start = Instant.fromEpochMilliseconds(date.atStartOfDayMillis()),
+                    end = Instant.fromEpochMilliseconds(date.atStartOfDayMillis() + 24 * 60 * 60 * 1000L),
+                    source = when (row.source) {
+                        "Fitbit" -> DataSource.Fitbit
+                        "GoogleHealth" -> DataSource.GoogleHealth
+                        else -> DataSource.HealthConnect
+                    },
+                )
+            }
         }
-    }
-
-    private suspend fun buildGoalMap(): Map<MetricType, Double> {
-        val map = mutableMapOf(
-            MetricType.Steps to DEFAULT_STEP_GOAL,
-            MetricType.Distance to DEFAULT_DISTANCE_GOAL_MI,
-            MetricType.ActiveCalories to DEFAULT_CALORIE_GOAL,
-            MetricType.ZoneMinutes to DEFAULT_ZONE_MIN_GOAL,
-        )
-        for (metric in map.keys.toList()) {
-            goalDao.get(metric.name)?.let { map[metric] = it.target }
-        }
-        return map
+        return allRaw
     }
 
     private fun defaultGoal(metric: MetricType): Double? = when (metric) {
@@ -555,7 +504,7 @@ class HealthRepositoryImpl @Inject constructor(
     }
 
     private fun buildInt(
-        entity: com.pulse.data.local.entity.DailyAggregateEntity?,
+        entity: SummaryDailyMetricEntity?,
         defaultGoal: Double,
         unitLabel: String,
     ): MetricValue<Int> {
@@ -570,7 +519,7 @@ class HealthRepositoryImpl @Inject constructor(
     }
 
     private fun buildMiles(
-        entity: com.pulse.data.local.entity.DailyAggregateEntity?,
+        entity: SummaryDailyMetricEntity?,
         defaultGoal: Double,
     ): MetricValue<Double> {
         val total = entity?.total ?: 0.0
@@ -580,34 +529,6 @@ class HealthRepositoryImpl @Inject constructor(
             goal = defaultGoal,
             progress = progress,
             unitLabel = "mi",
-        )
-    }
-
-    private fun buildMilesFromMeters(
-        meters: Double,
-        defaultGoal: Double,
-    ): MetricValue<Double> {
-        val miles = meters / METERS_PER_MILE
-        val progress = if (defaultGoal > 0) (miles / defaultGoal).toFloat().coerceIn(0f, 1.25f) else 0f
-        return MetricValue(
-            current = miles,
-            goal = defaultGoal,
-            progress = progress,
-            unitLabel = "mi",
-        )
-    }
-
-    private fun buildIntFromValue(
-        value: Double,
-        defaultGoal: Double,
-        unitLabel: String,
-    ): MetricValue<Int> {
-        val progress = if (defaultGoal > 0) (value / defaultGoal).toFloat().coerceIn(0f, 1.25f) else 0f
-        return MetricValue(
-            current = value.roundToInt(),
-            goal = defaultGoal.roundToInt(),
-            progress = progress,
-            unitLabel = unitLabel,
         )
     }
 

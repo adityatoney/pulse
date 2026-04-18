@@ -13,11 +13,13 @@ import com.pulse.data.cloud.NoopGoogleHealthRemoteDataSource
 import com.pulse.data.datastore.FeatureFlagsSerializer
 import com.pulse.data.datastore.PreferencesSerializer
 import com.pulse.data.local.PulseDatabase
-import com.pulse.data.local.dao.DailyAggregateDao
+import com.pulse.data.local.dao.ComputeQueueDao
 import com.pulse.data.local.dao.ExerciseSessionDao
 import com.pulse.data.local.dao.GoalDao
-import com.pulse.data.local.dao.HealthSampleDao
+import com.pulse.data.local.dao.RawDailyMetricDao
+import com.pulse.data.local.dao.RawSampleDao
 import com.pulse.data.local.dao.SleepSessionDao
+import com.pulse.data.local.dao.SummaryDailyMetricDao
 import com.pulse.data.local.dao.SyncStateDao
 import com.pulse.data.proto.FeatureFlags
 import com.pulse.data.proto.Preferences
@@ -64,19 +66,23 @@ object DataProvidersModule {
             .addMigrations(
                 PulseDatabase.MIGRATION_2_3,
                 PulseDatabase.MIGRATION_3_4,
+                PulseDatabase.MIGRATION_4_5,
+                PulseDatabase.MIGRATION_5_6,
             )
             .fallbackToDestructiveMigration()
             .build()
 
-    @Provides fun dailyAggregateDao(db: PulseDatabase): DailyAggregateDao = db.dailyAggregateDao()
     @Provides fun exerciseDao(db: PulseDatabase): ExerciseSessionDao = db.exerciseSessionDao()
     @Provides fun exerciseHrSampleDao(db: PulseDatabase): com.pulse.data.local.dao.ExerciseHrSampleDao = db.exerciseHrSampleDao()
     @Provides fun exerciseLapDao(db: PulseDatabase): com.pulse.data.local.dao.ExerciseLapDao = db.exerciseLapDao()
     @Provides fun exerciseRoutePointDao(db: PulseDatabase): com.pulse.data.local.dao.ExerciseRoutePointDao = db.exerciseRoutePointDao()
-    @Provides fun sampleDao(db: PulseDatabase): HealthSampleDao = db.healthSampleDao()
     @Provides fun syncStateDao(db: PulseDatabase): SyncStateDao = db.syncStateDao()
     @Provides fun goalDao(db: PulseDatabase): GoalDao = db.goalDao()
     @Provides fun sleepDao(db: PulseDatabase): SleepSessionDao = db.sleepSessionDao()
+    @Provides fun rawDailyMetricDao(db: PulseDatabase): RawDailyMetricDao = db.rawDailyMetricDao()
+    @Provides fun rawSampleDao(db: PulseDatabase): RawSampleDao = db.rawSampleDao()
+    @Provides fun summaryDailyMetricDao(db: PulseDatabase): SummaryDailyMetricDao = db.summaryDailyMetricDao()
+    @Provides fun computeQueueDao(db: PulseDatabase): ComputeQueueDao = db.computeQueueDao()
 
     @Provides
     @Singleton
