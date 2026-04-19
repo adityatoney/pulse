@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.DirectionsRun
 import androidx.compose.material.icons.outlined.Home
@@ -68,6 +69,8 @@ import androidx.lifecycle.flowWithLifecycle
 import com.pulse.core.designsystem.theme.LocalRingPalette
 import com.pulse.core.ui.badges.DeltaDirection
 import com.pulse.core.ui.badges.WoWMoMBadge
+import com.pulse.core.ui.insights.InsightCard
+import com.pulse.core.ui.insights.InsightSentimentUi
 import com.pulse.core.ui.chrome.BatteryChip
 import com.pulse.core.ui.chrome.DateScrollerRow
 import com.pulse.core.ui.ring.ActivityRingHero
@@ -79,6 +82,7 @@ import com.pulse.core.ui.util.formattedMiles
 import com.pulse.core.ui.util.relativeTo
 import com.pulse.core.ui.util.timeOfDay
 import com.pulse.domain.model.ExerciseSession
+import com.pulse.domain.model.InsightSentiment
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.SyncPhase
 import com.pulse.domain.model.TrendDirection
@@ -98,6 +102,7 @@ fun DashboardRoute(
     onNavigateToMetric: (MetricType) -> Unit,
     onNavigateToExerciseLog: () -> Unit,
     onNavigateToExerciseDetail: (String) -> Unit = {},
+    onNavigateToInsights: () -> Unit = {},
     onNavigateToChat: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToDebug: () -> Unit,
@@ -115,6 +120,7 @@ fun DashboardRoute(
                     is DashboardEffect.NavigateToMetricDetail -> onNavigateToMetric(effect.metric)
                     DashboardEffect.NavigateToExerciseLog -> onNavigateToExerciseLog()
                     is DashboardEffect.NavigateToExerciseDetail -> onNavigateToExerciseDetail(effect.sessionId)
+                    DashboardEffect.NavigateToInsights -> onNavigateToInsights()
                     DashboardEffect.NavigateToChat -> onNavigateToChat()
                     DashboardEffect.NavigateToProfile -> onNavigateToProfile()
                     DashboardEffect.NavigateToDebugMenu -> onNavigateToDebug()
@@ -220,9 +226,9 @@ fun DashboardScreen(
                 )
                 NavigationBarItem(
                     selected = false,
-                    onClick = { onIntent(DashboardIntent.OpenChat) },
-                    icon = { Icon(Icons.Outlined.SelfImprovement, contentDescription = null) },
-                    label = { Text("Coach") },
+                    onClick = { onIntent(DashboardIntent.OpenInsights) },
+                    icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                    label = { Text("Insights") },
                 )
                 NavigationBarItem(
                     selected = false,
@@ -339,6 +345,23 @@ fun DashboardScreen(
                 }
             }
 
+            if (state.insights.isNotEmpty()) {
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        state.insights.forEach { insight ->
+                            InsightCard(
+                                headline = insight.headline,
+                                body = insight.body,
+                                sentiment = insight.sentiment.toUi(),
+                            )
+                        }
+                    }
+                }
+            }
+
             item { RecoverySection(state) }
 
             item { BodyMetricsSection(state, onIntent) }
@@ -410,6 +433,13 @@ private fun TrendDirection.toDirection() = when (this) {
     TrendDirection.Up -> DeltaDirection.Up
     TrendDirection.Down -> DeltaDirection.Down
     TrendDirection.Flat -> DeltaDirection.Flat
+}
+
+private fun InsightSentiment.toUi(): InsightSentimentUi = when (this) {
+    InsightSentiment.Positive -> InsightSentimentUi.Positive
+    InsightSentiment.Neutral -> InsightSentimentUi.Neutral
+    InsightSentiment.Negative -> InsightSentimentUi.Negative
+    InsightSentiment.Celebratory -> InsightSentimentUi.Celebratory
 }
 
 private fun syncChipLabel(sync: com.pulse.domain.model.SyncStatus): String = when (sync.state) {

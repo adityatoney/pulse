@@ -21,6 +21,7 @@ import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.Vo2MaxRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.DataOrigin
+import androidx.health.connect.client.request.AggregateGroupByDurationRequest
 import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.changes.DeletionChange
@@ -173,6 +174,22 @@ class HealthConnectDataSource @Inject constructor(
             end.plusDays(1).atStartOfDay(zone).toInstant()
         )
         return c.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, range)).records
+    }
+
+    // --- Hourly aggregates (used by Circadian Delta) -----------------------
+
+    suspend fun stepsByHour(day: JavaLocalDate, zone: ZoneId): Map<Int, Long> {
+        val c = client ?: return emptyMap()
+        val start = day.atStartOfDay(zone).toInstant()
+        val end = day.plusDays(1).atStartOfDay(zone).toInstant()
+        val req = AggregateGroupByDurationRequest(
+            metrics = setOf(StepsRecord.COUNT_TOTAL),
+            timeRangeFilter = TimeRangeFilter.between(start, end),
+            timeRangeSlicer = java.time.Duration.ofHours(1),
+        )
+        return c.aggregateGroupByDuration(req).associate { bucket ->
+            bucket.startTime.atZone(zone).hour to (bucket.result[StepsRecord.COUNT_TOTAL] ?: 0L)
+        }
     }
 
     // --- Range series (used by Metric Detail charts) ----------------------

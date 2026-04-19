@@ -1,6 +1,7 @@
 package com.pulse.feature.detail.state
 
 import com.pulse.domain.model.DeltaPercent
+import com.pulse.domain.model.Insight
 import com.pulse.domain.model.MetricSeries
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.Timeframe
@@ -24,6 +25,7 @@ data class MetricDetailState(
     val wow: DeltaPercent? = null,
     val mom: DeltaPercent? = null,
     val comparisons: List<PeriodComparison> = emptyList(),
+    val insights: List<Insight> = emptyList(),
     val loading: Boolean = true,
     val error: String? = null,
     val selectedBarIndex: Int? = null,

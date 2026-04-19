@@ -67,6 +67,7 @@ dependencies {
     implementation(project(":feature:debug"))
     implementation(project(":feature:exercise"))
     implementation(project(":feature:you"))
+    implementation(project(":feature:insights"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

@@ -10,7 +10,9 @@ import com.pulse.data.local.dao.ExerciseLapDao
 import com.pulse.data.local.dao.ExerciseRoutePointDao
 import com.pulse.data.local.dao.ExerciseSessionDao
 import com.pulse.data.local.dao.GoalDao
+import com.pulse.data.local.dao.InsightDao
 import com.pulse.data.local.dao.RawDailyMetricDao
+import com.pulse.data.local.dao.RawHourlyMetricDao
 import com.pulse.data.local.dao.RawSampleDao
 import com.pulse.data.local.dao.SleepSessionDao
 import com.pulse.data.local.dao.SummaryDailyMetricDao
@@ -21,7 +23,9 @@ import com.pulse.data.local.entity.ExerciseLapEntity
 import com.pulse.data.local.entity.ExerciseRoutePointEntity
 import com.pulse.data.local.entity.ExerciseSessionEntity
 import com.pulse.data.local.entity.GoalEntity
+import com.pulse.data.local.entity.InsightEntity
 import com.pulse.data.local.entity.RawDailyMetricEntity
+import com.pulse.data.local.entity.RawHourlyMetricEntity
 import com.pulse.data.local.entity.RawSampleEntity
 import com.pulse.data.local.entity.SleepSessionEntity
 import com.pulse.data.local.entity.SummaryDailyMetricEntity
@@ -40,8 +44,10 @@ import com.pulse.data.local.entity.SyncStateEntity
         RawSampleEntity::class,
         SummaryDailyMetricEntity::class,
         ComputeQueueEntity::class,
+        RawHourlyMetricEntity::class,
+        InsightEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class PulseDatabase : RoomDatabase() {
@@ -56,10 +62,12 @@ abstract class PulseDatabase : RoomDatabase() {
     abstract fun rawSampleDao(): RawSampleDao
     abstract fun summaryDailyMetricDao(): SummaryDailyMetricDao
     abstract fun computeQueueDao(): ComputeQueueDao
+    abstract fun rawHourlyMetricDao(): RawHourlyMetricDao
+    abstract fun insightDao(): InsightDao
 
     companion object {
         const val NAME = "pulse.db"
-        const val VERSION = 6
+        const val VERSION = 7
 
         /** v2 → v3: Add exercise HR samples, laps, and extra columns on exercise_sessions. */
         val MIGRATION_2_3 = object : Migration(2, 3) {
@@ -203,6 +211,46 @@ abstract class PulseDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("DROP TABLE IF EXISTS daily_aggregates")
                 db.execSQL("DROP TABLE IF EXISTS health_samples")
+            }
+        }
+
+        /** v6 → v7: Add raw_hourly_metrics and insights tables. */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS raw_hourly_metrics (
+                        date TEXT NOT NULL,
+                        hour INTEGER NOT NULL,
+                        metric TEXT NOT NULL,
+                        value REAL NOT NULL,
+                        source TEXT NOT NULL,
+                        ingestedAtMs INTEGER NOT NULL,
+                        PRIMARY KEY (date, hour, metric, source)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_raw_hourly_metrics_metric_date ON raw_hourly_metrics(metric, date)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS insights (
+                        id TEXT NOT NULL,
+                        date TEXT NOT NULL,
+                        type TEXT NOT NULL,
+                        metric TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        context TEXT NOT NULL,
+                        headline TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        sentiment TEXT NOT NULL,
+                        score REAL NOT NULL,
+                        signalValue REAL,
+                        metadata TEXT,
+                        computedAtMs INTEGER NOT NULL,
+                        PRIMARY KEY (id)
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_insights_date ON insights(date)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_insights_context_date ON insights(context, date)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_insights_category_date ON insights(category, date)")
             }
         }
     }

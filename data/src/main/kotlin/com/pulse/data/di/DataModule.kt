@@ -16,7 +16,9 @@ import com.pulse.data.local.PulseDatabase
 import com.pulse.data.local.dao.ComputeQueueDao
 import com.pulse.data.local.dao.ExerciseSessionDao
 import com.pulse.data.local.dao.GoalDao
+import com.pulse.data.local.dao.InsightDao
 import com.pulse.data.local.dao.RawDailyMetricDao
+import com.pulse.data.local.dao.RawHourlyMetricDao
 import com.pulse.data.local.dao.RawSampleDao
 import com.pulse.data.local.dao.SleepSessionDao
 import com.pulse.data.local.dao.SummaryDailyMetricDao
@@ -28,12 +30,14 @@ import com.pulse.data.repository.DebugRepositoryImpl
 import com.pulse.data.repository.DeviceStatusRepositoryImpl
 import com.pulse.data.repository.GoalsRepositoryImpl
 import com.pulse.data.repository.HealthRepositoryImpl
+import com.pulse.data.repository.InsightsRepositoryImpl
 import com.pulse.data.repository.SyncRepositoryImpl
 import com.pulse.domain.repository.BackupRepository
 import com.pulse.domain.repository.DebugRepository
 import com.pulse.domain.repository.DeviceStatusRepository
 import com.pulse.domain.repository.GoalsRepository
 import com.pulse.domain.repository.HealthRepository
+import com.pulse.domain.repository.InsightsRepository
 import com.pulse.domain.repository.SyncRepository
 import com.pulse.domain.util.Clock
 import com.pulse.domain.util.SystemClock
@@ -68,6 +72,7 @@ object DataProvidersModule {
                 PulseDatabase.MIGRATION_3_4,
                 PulseDatabase.MIGRATION_4_5,
                 PulseDatabase.MIGRATION_5_6,
+                PulseDatabase.MIGRATION_6_7,
             )
             .fallbackToDestructiveMigration()
             .build()
@@ -83,6 +88,8 @@ object DataProvidersModule {
     @Provides fun rawSampleDao(db: PulseDatabase): RawSampleDao = db.rawSampleDao()
     @Provides fun summaryDailyMetricDao(db: PulseDatabase): SummaryDailyMetricDao = db.summaryDailyMetricDao()
     @Provides fun computeQueueDao(db: PulseDatabase): ComputeQueueDao = db.computeQueueDao()
+    @Provides fun rawHourlyMetricDao(db: PulseDatabase): RawHourlyMetricDao = db.rawHourlyMetricDao()
+    @Provides fun insightDao(db: PulseDatabase): InsightDao = db.insightDao()
 
     @Provides
     @Singleton
@@ -149,4 +156,5 @@ abstract class DataBindsModule {
     @Binds @Singleton abstract fun deviceStatusRepository(impl: DeviceStatusRepositoryImpl): DeviceStatusRepository
     @Binds @Singleton abstract fun debugRepository(impl: DebugRepositoryImpl): DebugRepository
     @Binds @Singleton abstract fun backupRepository(impl: BackupRepositoryImpl): BackupRepository
+    @Binds @Singleton abstract fun insightsRepository(impl: InsightsRepositoryImpl): InsightsRepository
 }

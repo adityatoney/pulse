@@ -1,18 +1,21 @@
 package com.pulse.data.sync
 
 import android.util.Log
+import com.pulse.data.compute.HealthIntelligenceService
 import com.pulse.data.compute.SummaryComputeEngine
 import com.pulse.data.health.HealthConnectDataSource
 import com.pulse.data.local.dao.ComputeQueueDao
 import com.pulse.data.local.dao.ExerciseSessionDao
 import com.pulse.data.local.dao.ExerciseHrSampleDao
 import com.pulse.data.local.dao.RawDailyMetricDao
+import com.pulse.data.local.dao.RawHourlyMetricDao
 import com.pulse.data.local.dao.RawSampleDao
 import com.pulse.data.local.dao.SleepSessionDao
 import com.pulse.data.local.dao.SyncStateDao
 import com.pulse.data.local.entity.ComputeQueueEntity
 import com.pulse.data.local.entity.ExerciseSessionEntity
 import com.pulse.data.local.entity.RawDailyMetricEntity
+import com.pulse.data.local.entity.RawHourlyMetricEntity
 import com.pulse.data.local.entity.RawSampleEntity
 import com.pulse.data.local.entity.SleepSessionEntity
 import com.pulse.data.local.entity.SyncStateEntity
@@ -35,14 +38,17 @@ private const val BACKFILL_CURSOR_KEY = "hc_backfill_cursor"
 private const val QUOTA_PAUSE_KEY = "hc_quota_pause_until"
 private const val CHUNK_DELAY_MS = 5_000L
 private const val QUOTA_PAUSE_DURATION_MS = 5 * 60 * 1000L
+private const val SOURCE_PRIORITY_V2_KEY = "source_priority_v2_recomputed"
 
 @Singleton
 class EnhancedHealthSyncManager @Inject constructor(
     private val hc: HealthConnectDataSource,
     private val rawDailyDao: RawDailyMetricDao,
+    private val rawHourlyDao: RawHourlyMetricDao,
     private val rawSampleDao: RawSampleDao,
     private val computeQueueDao: ComputeQueueDao,
     private val computeEngine: SummaryComputeEngine,
+    private val intelligenceService: HealthIntelligenceService,
     private val exerciseDao: ExerciseSessionDao,
     private val hrSampleDao: ExerciseHrSampleDao,
     private val sleepDao: SleepSessionDao,
@@ -82,6 +88,24 @@ class EnhancedHealthSyncManager @Inject constructor(
 
         // Trigger summary computation from raw data
         computeEngine.processQueue()
+
+        // One-time recompute after source priority restructuring (HC > Google > Fitbit)
+        if (syncStateDao.get(SOURCE_PRIORITY_V2_KEY) == null) {
+            Log.d(TAG, "Running one-time recompute for source priority v2")
+            computeEngine.recomputeAll(days = 365)
+            syncStateDao.upsert(SyncStateEntity(
+                key = SOURCE_PRIORITY_V2_KEY,
+                value = "done",
+                updatedAtMs = System.currentTimeMillis(),
+            ))
+        }
+
+        // Compute insights for affected dates
+        val affectedDates = generateSequence(start) { it.plusDays(1) }
+            .takeWhile { !it.isAfter(today) }
+            .map { it.toString() }
+            .toList()
+        intelligenceService.computeAll(affectedDates)
 
         hc.requestChangesToken()?.let { saveToken(it) }
     }
@@ -123,6 +147,12 @@ class EnhancedHealthSyncManager @Inject constructor(
                 fetchExerciseWithDetails(chunkStart, chunkEnd, zone)
             }
             computeEngine.processQueue()
+
+            val chunkDates = generateSequence(chunkStart) { it.plusDays(1) }
+                .takeWhile { !it.isAfter(chunkEnd) }
+                .map { it.toString() }
+                .toList()
+            intelligenceService.computeAll(chunkDates)
 
             syncStateDao.upsert(SyncStateEntity(
                 key = BACKFILL_CURSOR_KEY,
@@ -168,6 +198,12 @@ class EnhancedHealthSyncManager @Inject constructor(
                 }
                 computeEngine.processQueue()
 
+                val incrementalDates = generateSequence(start) { it.plusDays(1) }
+                    .takeWhile { !it.isAfter(today) }
+                    .map { it.toString() }
+                    .toList()
+                intelligenceService.computeAll(incrementalDates)
+
                 saveToken(result.nextToken)
             }
         }
@@ -194,6 +230,19 @@ class EnhancedHealthSyncManager @Inject constructor(
             )
             dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.Steps.name, enqueuedAtMs = nowMs)
         }
+
+        // Ingest hourly step data for Circadian Delta
+        val hourlyEntities = mutableListOf<RawHourlyMetricEntity>()
+        for (day in generateSequence(start) { it.plusDays(1) }.takeWhile { !it.isAfter(end) }) {
+            val hourly = hc.stepsByHour(day, zone)
+            hourly.forEach { (hour, value) ->
+                hourlyEntities += RawHourlyMetricEntity(
+                    date = day.toString(), hour = hour, metric = "Steps",
+                    value = value.toDouble(), source = "HealthConnect", ingestedAtMs = nowMs,
+                )
+            }
+        }
+        if (hourlyEntities.isNotEmpty()) rawHourlyDao.insertAll(hourlyEntities)
 
         val dist = hc.distanceByDay(start, end, zone)
         dist.forEach { (day, meters) ->

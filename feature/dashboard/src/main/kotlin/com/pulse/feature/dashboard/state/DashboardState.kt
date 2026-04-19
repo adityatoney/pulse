@@ -3,6 +3,7 @@ package com.pulse.feature.dashboard.state
 import com.pulse.domain.model.DeltaPercent
 import com.pulse.domain.model.DeviceStatus
 import com.pulse.domain.model.ExerciseSession
+import com.pulse.domain.model.Insight
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.SyncStatus
 import com.pulse.domain.model.Timeframe
@@ -28,6 +29,7 @@ data class DashboardState(
     val user: UserChrome? = null,
     val permissionsGranted: Boolean = false,
     val recentExercises: List<ExerciseSession> = emptyList(),
+    val insights: List<Insight> = emptyList(),
     val restingHr: Double? = null,
     val weight: Double? = null,
     val spo2: Double? = null,
@@ -53,6 +55,7 @@ sealed interface DashboardIntent {
     data object ForceSyncNow : DashboardIntent
     data object RequestPermissions : DashboardIntent
     data class PermissionsResult(val granted: Boolean) : DashboardIntent
+    data object OpenInsights : DashboardIntent
     data object OpenChat : DashboardIntent
     data object OpenProfile : DashboardIntent
     data object OpenDebugMenu : DashboardIntent
@@ -62,6 +65,7 @@ sealed interface DashboardEffect {
     data class NavigateToMetricDetail(val metric: MetricType) : DashboardEffect
     data object NavigateToExerciseLog : DashboardEffect
     data class NavigateToExerciseDetail(val sessionId: String) : DashboardEffect
+    data object NavigateToInsights : DashboardEffect
     data object NavigateToChat : DashboardEffect
     data object NavigateToProfile : DashboardEffect
     data object NavigateToDebugMenu : DashboardEffect

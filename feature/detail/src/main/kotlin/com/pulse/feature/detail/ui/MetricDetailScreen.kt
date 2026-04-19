@@ -40,8 +40,11 @@ import androidx.lifecycle.flowWithLifecycle
 import com.pulse.core.designsystem.theme.LocalRingPalette
 import com.pulse.core.ui.badges.DeltaDirection
 import com.pulse.core.ui.badges.WoWMoMBadge
+import com.pulse.core.ui.insights.InsightCard
+import com.pulse.core.ui.insights.InsightSentimentUi
 import com.pulse.core.ui.list.PeriodComparisonList
 import com.pulse.core.ui.list.PeriodComparisonRow
+import com.pulse.domain.model.InsightSentiment
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.Timeframe
 import com.pulse.domain.model.TrendDirection
@@ -138,6 +141,22 @@ fun MetricDetailScreen(
                 ) {
                     WoWMoMBadge("WoW", state.wow?.value, state.wow?.direction?.toDelta())
                     WoWMoMBadge("MoM", state.mom?.value, state.mom?.direction?.toDelta())
+                }
+            }
+            if (state.insights.isNotEmpty()) {
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        state.insights.forEach { insight ->
+                            InsightCard(
+                                headline = insight.headline,
+                                body = insight.body,
+                                sentiment = insight.sentiment.toDetailUi(),
+                            )
+                        }
+                    }
                 }
             }
             item {
@@ -388,6 +407,13 @@ private fun formatBarValue(v: Float, metric: MetricType): String = when (metric)
     MetricType.Weight, MetricType.BodyFat, MetricType.SpO2, MetricType.SkinTemperature,
     MetricType.HRV, MetricType.VO2Max -> "%.1f".format(v)
     else -> "%,d".format(v.toInt())
+}
+
+private fun InsightSentiment.toDetailUi(): InsightSentimentUi = when (this) {
+    InsightSentiment.Positive -> InsightSentimentUi.Positive
+    InsightSentiment.Neutral -> InsightSentimentUi.Neutral
+    InsightSentiment.Negative -> InsightSentimentUi.Negative
+    InsightSentiment.Celebratory -> InsightSentimentUi.Celebratory
 }
 
 private fun TrendDirection.toDelta() = when (this) {

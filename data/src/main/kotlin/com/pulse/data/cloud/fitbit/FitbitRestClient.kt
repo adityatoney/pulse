@@ -150,6 +150,9 @@ class FitbitRestClient @Inject constructor(
 
         val response: HttpResponse = httpClient.get(url) {
             header("Authorization", "Bearer $token")
+            // Force imperial units so distance is always returned in miles,
+            // regardless of the user's Fitbit profile locale setting.
+            header("Accept-Language", "en_US")
             timeout {
                 requestTimeoutMillis = 60_000
                 socketTimeoutMillis = 60_000

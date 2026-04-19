@@ -51,6 +51,21 @@ interface SummaryDailyMetricDao {
     @Query("SELECT * FROM summary_daily_metrics")
     suspend fun getAll(): List<SummaryDailyMetricEntity>
 
+    @Query("SELECT * FROM summary_daily_metrics WHERE metric = :metric AND date BETWEEN :start AND :end ORDER BY date ASC")
+    suspend fun getRange(metric: String, start: String, end: String): List<SummaryDailyMetricEntity>
+
+    @Query("SELECT * FROM summary_daily_metrics WHERE metric = :metric AND total > 0 ORDER BY total DESC LIMIT 1")
+    suspend fun bestEver(metric: String): SummaryDailyMetricEntity?
+
+    @Query("SELECT MIN(total) FROM summary_daily_metrics WHERE metric = :metric AND date BETWEEN :start AND :end AND total > 0")
+    suspend fun minInRange(metric: String, start: String, end: String): Double?
+
+    @Query("SELECT AVG(total) FROM summary_daily_metrics WHERE metric = :metric AND date BETWEEN :start AND :end AND total > 0")
+    suspend fun avgInRange(metric: String, start: String, end: String): Double?
+
+    @Query("SELECT COUNT(*) FROM summary_daily_metrics WHERE metric = :metric AND date BETWEEN :start AND :end AND total > 0")
+    suspend fun countInRange(metric: String, start: String, end: String): Int
+
     @Query("DELETE FROM summary_daily_metrics")
     suspend fun clear()
 }

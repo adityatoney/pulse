@@ -7,6 +7,7 @@ import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.Timeframe
 import com.pulse.domain.usecase.CalculateMoMUseCase
 import com.pulse.domain.usecase.CalculateWoWUseCase
+import com.pulse.domain.usecase.GetInsightsUseCase
 import com.pulse.domain.usecase.GetMetricSeriesUseCase
 import com.pulse.domain.util.Clock
 import com.pulse.feature.detail.state.MetricDetailEffect
@@ -37,6 +38,7 @@ class MetricDetailViewModel @Inject constructor(
     private val getSeries: GetMetricSeriesUseCase,
     private val calcWoW: CalculateWoWUseCase,
     private val calcMoM: CalculateMoMUseCase,
+    private val getInsights: GetInsightsUseCase,
     private val clock: Clock,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
@@ -150,6 +152,23 @@ class MetricDetailViewModel @Inject constructor(
                 )
             }
         }.launchIn(viewModelScope)
+
+        // Wire insights for context-appropriate view
+        val insightContext = when (s.timeframe) {
+            Timeframe.Day -> "DetailDay"
+            Timeframe.Week -> "DetailWeek"
+            Timeframe.Month -> "DetailMonth"
+            else -> "Detail3M6MY"
+        }
+        val insightLimit = when (s.timeframe) {
+            Timeframe.Day -> 1
+            Timeframe.Week, Timeframe.Month -> 2
+            else -> 1
+        }
+        getInsights.forMetric(s.periodAnchor.toString(), insightContext, s.metric.name, insightLimit)
+            .onEach { insights ->
+                _state.update { it.copy(insights = insights) }
+            }.launchIn(viewModelScope)
     }
 
     /** Returns the anchor dates for comparison rows. */

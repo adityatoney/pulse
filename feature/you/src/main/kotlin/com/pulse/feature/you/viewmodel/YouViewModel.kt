@@ -142,7 +142,7 @@ class YouViewModel @Inject constructor(
                             _state.update {
                                 it.copy(
                                     backupInProgress = false,
-                                    lastBackupTime = info.modifiedTime,
+                                    lastBackupTime = formatBackupTime(info.modifiedTime),
                                     lastBackupSize = formatBytes(info.sizeBytes),
                                     backupMessage = "Backup complete",
                                 )
@@ -273,7 +273,7 @@ class YouViewModel @Inject constructor(
                 if (info != null) {
                     _state.update {
                         it.copy(
-                            lastBackupTime = info.modifiedTime,
+                            lastBackupTime = formatBackupTime(info.modifiedTime),
                             lastBackupSize = formatBytes(info.sizeBytes),
                         )
                     }
@@ -297,5 +297,13 @@ class YouViewModel @Inject constructor(
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
         else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    }
+
+    private fun formatBackupTime(isoUtc: String): String = try {
+        val instant = java.time.Instant.parse(isoUtc)
+        val local = instant.atZone(java.time.ZoneId.systemDefault())
+        java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a").format(local)
+    } catch (_: Exception) {
+        isoUtc
     }
 }

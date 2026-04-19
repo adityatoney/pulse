@@ -9,6 +9,7 @@ import com.pulse.domain.model.Timeframe
 import com.pulse.domain.repository.HealthRepository
 import com.pulse.domain.usecase.CalculateMoMUseCase
 import com.pulse.domain.usecase.CalculateWoWUseCase
+import com.pulse.domain.usecase.GetInsightsUseCase
 import com.pulse.domain.usecase.GetTodaySummaryUseCase
 import com.pulse.domain.usecase.ObserveDeviceStatusUseCase
 import com.pulse.domain.usecase.ObserveSyncStatusUseCase
@@ -44,6 +45,7 @@ class DashboardViewModel @Inject constructor(
     private val getToday: GetTodaySummaryUseCase,
     private val calcWoW: CalculateWoWUseCase,
     private val calcMoM: CalculateMoMUseCase,
+    private val getInsights: GetInsightsUseCase,
     private val observeSync: ObserveSyncStatusUseCase,
     private val observeDevice: ObserveDeviceStatusUseCase,
     private val observeUser: ObserveUserChromeUseCase,
@@ -113,6 +115,10 @@ class DashboardViewModel @Inject constructor(
             _state.update { it.copy(recentExercises = sessions) }
         }.launchIn(viewModelScope)
 
+        getInsights(date.toString(), "Dashboard", limit = 3).onEach { insights ->
+            _state.update { it.copy(insights = insights) }
+        }.launchIn(viewModelScope)
+
         combine(
             health.observeDailyAggregate(date, MetricType.RestingHeartRate),
             health.observeDailyAggregate(date, MetricType.Weight),
@@ -159,6 +165,7 @@ class DashboardViewModel @Inject constructor(
             }
             DashboardIntent.RequestPermissions -> _effects.trySend(DashboardEffect.RequestHealthConnectPermissions)
             is DashboardIntent.PermissionsResult -> _state.update { it.copy(permissionsGranted = intent.granted) }
+            DashboardIntent.OpenInsights -> _effects.trySend(DashboardEffect.NavigateToInsights)
             DashboardIntent.OpenChat -> _effects.trySend(DashboardEffect.NavigateToChat)
             DashboardIntent.OpenProfile -> _effects.trySend(DashboardEffect.NavigateToProfile)
             DashboardIntent.OpenDebugMenu -> _effects.trySend(DashboardEffect.NavigateToDebugMenu)

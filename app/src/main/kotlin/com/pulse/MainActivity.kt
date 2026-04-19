@@ -45,6 +45,8 @@ import com.pulse.feature.exercise.navigation.ExerciseDetail
 import com.pulse.feature.exercise.navigation.ExerciseLog
 import com.pulse.feature.exercise.navigation.exerciseDetailScreen
 import com.pulse.feature.exercise.navigation.exerciseLogScreen
+import com.pulse.feature.insights.navigation.Insights
+import com.pulse.feature.insights.navigation.insightsScreen
 import com.pulse.feature.you.navigation.YouProfile
 import com.pulse.feature.you.navigation.youScreen
 import dagger.hilt.android.AndroidEntryPoint
@@ -228,6 +230,7 @@ fun FitbitNavHost(hcDataSource: HealthConnectDataSource) {
             onNavigateToMetric = { metric -> nav.navigate(MetricDetail(metric.name)) },
             onNavigateToExerciseLog = { nav.navigate(ExerciseLog) },
             onNavigateToExerciseDetail = { sessionId -> nav.navigate(ExerciseDetail(sessionId)) },
+            onNavigateToInsights = { nav.navigate(Insights) },
             onNavigateToChat = {
                 Toast.makeText(context, "Coach coming soon", Toast.LENGTH_SHORT).show()
             },
@@ -245,6 +248,7 @@ fun FitbitNavHost(hcDataSource: HealthConnectDataSource) {
         )
         exerciseDetailScreen(onBack = { nav.popBackStack() })
         youScreen(onBack = { nav.popBackStack() })
+        insightsScreen(onBack = { nav.popBackStack() })
         debugMenuScreen(onDismiss = { nav.popBackStack() })
     }
 }

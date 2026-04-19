@@ -31,8 +31,12 @@ private const val DEFAULT_CALORIE_GOAL = 2_500.0
 private const val DEFAULT_ZONE_MIN_GOAL = 22.0
 private const val METERS_PER_MILE = 1_609.34
 
-/** Source priority: higher index = higher priority (last match wins). */
-private val SOURCE_PRIORITY = listOf("legacy", "HealthConnect", "GoogleHealth", "Fitbit")
+/**
+ * Source priority: higher index = higher priority (last match wins).
+ * HealthConnect > Google Health API > Fitbit API.
+ * No legacy tier — Fitbit API overwrites any legacy data.
+ */
+private val SOURCE_PRIORITY = listOf("Fitbit", "GoogleHealth", "HealthConnect")
 
 @Singleton
 class SummaryComputeEngine @Inject constructor(
