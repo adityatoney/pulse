@@ -46,12 +46,22 @@ data class YouState(
     val fitbitSyncCursor: String? = null,
     val fitbitSyncing: Boolean = false,
 
+    // Google Health
+    val googleHealthSignedIn: Boolean = false,
+
+    // Sync
+    val syncing: Boolean = false,
+    val syncMessage: String? = null,
+
+    // Appearance
+    val forceDarkMode: Boolean = false,
+    val useDynamicColor: Boolean = false,
+
     // Display preferences
     val activityOnlyDistance: Boolean = false,
     val activityOnlyCalories: Boolean = false,
 
-    // Backup
-    val backupEnabled: Boolean = false,
+    // Backup (always shown)
     val driveSignedIn: Boolean = false,
     val lastBackupTime: String? = null,
     val lastBackupSize: String? = null,
@@ -70,6 +80,9 @@ sealed interface YouIntent {
     data object Back : YouIntent
     data object FitbitSignIn : YouIntent
     data object FitbitSignOut : YouIntent
+    data object GoogleHealthSignIn : YouIntent
+    data object GoogleHealthSignOut : YouIntent
+    data object SyncNow : YouIntent
     data object DriveSignIn : YouIntent
     data object DriveSignOut : YouIntent
     data object BackupNow : YouIntent
@@ -77,10 +90,13 @@ sealed interface YouIntent {
     data object DismissBackupMessage : YouIntent
     data class SetActivityOnlyDistance(val enabled: Boolean) : YouIntent
     data class SetActivityOnlyCalories(val enabled: Boolean) : YouIntent
+    data class SetDarkMode(val enabled: Boolean) : YouIntent
+    data class SetDynamicColor(val enabled: Boolean) : YouIntent
 }
 
 sealed interface YouEffect {
     data object NavigateBack : YouEffect
     data object LaunchDriveSignIn : YouEffect
     data object LaunchFitbitSignIn : YouEffect
+    data object LaunchGoogleHealthAuth : YouEffect
 }

@@ -9,10 +9,7 @@ import java.io.OutputStream
 
 object FeatureFlagsSerializer : Serializer<FeatureFlags> {
     override val defaultValue: FeatureFlags = FeatureFlags.newBuilder()
-        .setSharedElementTransitions(true)
-        .setVicoGradientBars(true)
         .setWowMomOnDashboard(true)
-        .setGoogleHealthReconcile(false)
         .setForceDarkMode(false)
         .setFaultInjectionActive(false)
         .setFaultInjectionExpiresAtMs(0L)

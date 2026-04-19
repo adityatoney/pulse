@@ -3,15 +3,18 @@ package com.pulse.feature.you.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pulse.data.cloud.DriveAuthManager
+import com.pulse.data.cloud.GoogleHealthAuthManager
 import com.pulse.data.cloud.fitbit.FitbitAuthManager
 import com.pulse.data.cloud.fitbit.FitbitSyncManager
 import com.pulse.data.compute.SummaryComputeEngine
+import com.pulse.data.datastore.FeatureFlagKey
 import com.pulse.data.datastore.FeatureFlagRepository
 import com.pulse.data.datastore.PreferencesRepository
 import com.pulse.domain.model.Cadence
 import com.pulse.domain.model.Goal
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.repository.BackupRepository
+import com.pulse.domain.repository.DebugRepository
 import com.pulse.domain.repository.GoalsRepository
 import com.pulse.domain.repository.HealthRepository
 import com.pulse.domain.usecase.ZoneMinuteCalculator
@@ -36,10 +39,12 @@ class YouViewModel @Inject constructor(
     private val goalsRepo: GoalsRepository,
     private val healthRepo: HealthRepository,
     private val backupRepo: BackupRepository,
+    private val debugRepo: DebugRepository,
     private val featureFlags: FeatureFlagRepository,
     private val prefsRepo: PreferencesRepository,
     val driveAuthManager: DriveAuthManager,
     val fitbitAuthManager: FitbitAuthManager,
+    val googleHealthAuthManager: GoogleHealthAuthManager,
     private val fitbitSyncManager: FitbitSyncManager,
     private val computeEngine: SummaryComputeEngine,
     private val clock: Clock,
@@ -58,6 +63,7 @@ class YouViewModel @Inject constructor(
         observeDisplayPrefs()
         loadBackupStatus()
         loadFitbitStatus()
+        loadGoogleHealthStatus()
     }
 
     fun onIntent(intent: YouIntent) {
@@ -120,6 +126,8 @@ class YouViewModel @Inject constructor(
                 }
             }
             YouIntent.Back -> _effects.trySend(YouEffect.NavigateBack)
+
+            // ── Data Providers ──
             YouIntent.FitbitSignIn -> _effects.trySend(YouEffect.LaunchFitbitSignIn)
             YouIntent.FitbitSignOut -> {
                 viewModelScope.launch {
@@ -127,6 +135,29 @@ class YouViewModel @Inject constructor(
                     _state.update { it.copy(fitbitConnected = false, fitbitSyncCursor = null) }
                 }
             }
+            YouIntent.GoogleHealthSignIn -> _effects.trySend(YouEffect.LaunchGoogleHealthAuth)
+            YouIntent.GoogleHealthSignOut -> {
+                viewModelScope.launch {
+                    googleHealthAuthManager.signOut()
+                    _state.update { it.copy(googleHealthSignedIn = false) }
+                }
+            }
+            YouIntent.SyncNow -> {
+                viewModelScope.launch {
+                    _state.update { it.copy(syncing = true, syncMessage = null) }
+                    try {
+                        debugRepo.forceSyncNow()
+                        if (_state.value.fitbitConnected) {
+                            fitbitSyncManager.sync()
+                        }
+                        _state.update { it.copy(syncing = false, syncMessage = "Sync complete") }
+                    } catch (e: Exception) {
+                        _state.update { it.copy(syncing = false, syncMessage = "Sync failed: ${e.message}") }
+                    }
+                }
+            }
+
+            // ── Backup ──
             YouIntent.DriveSignIn -> _effects.trySend(YouEffect.LaunchDriveSignIn)
             YouIntent.DriveSignOut -> {
                 viewModelScope.launch {
@@ -183,6 +214,8 @@ class YouViewModel @Inject constructor(
             YouIntent.DismissBackupMessage -> {
                 _state.update { it.copy(backupMessage = null) }
             }
+
+            // ── Display Preferences ──
             is YouIntent.SetActivityOnlyDistance -> {
                 viewModelScope.launch {
                     prefsRepo.setActivityOnlyDistance(intent.enabled)
@@ -193,6 +226,18 @@ class YouViewModel @Inject constructor(
                 viewModelScope.launch {
                     prefsRepo.setActivityOnlyCalories(intent.enabled)
                     computeEngine.recomputeAll()
+                }
+            }
+
+            // ── Appearance ──
+            is YouIntent.SetDarkMode -> {
+                viewModelScope.launch {
+                    featureFlags.setFlag(FeatureFlagKey.ForceDarkMode, intent.enabled)
+                }
+            }
+            is YouIntent.SetDynamicColor -> {
+                viewModelScope.launch {
+                    featureFlags.setFlag(FeatureFlagKey.UseDynamicColor, intent.enabled)
                 }
             }
         }
@@ -206,6 +251,15 @@ class YouViewModel @Inject constructor(
             )
         }
         if (success) loadBackupStatus()
+    }
+
+    fun onGoogleSignInResult(success: Boolean, message: String?) {
+        _state.update {
+            it.copy(
+                googleHealthSignedIn = success,
+                syncMessage = if (!success) "Google sign-in failed: $message" else null,
+            )
+        }
     }
 
     private fun loadGoals() {
@@ -258,7 +312,10 @@ class YouViewModel @Inject constructor(
         viewModelScope.launch {
             featureFlags.observe().collect { flags ->
                 _state.update {
-                    it.copy(backupEnabled = flags.driveBackupEnabled)
+                    it.copy(
+                        forceDarkMode = flags.forceDarkMode,
+                        useDynamicColor = flags.useDynamicColor,
+                    )
                 }
             }
         }
@@ -287,6 +344,10 @@ class YouViewModel @Inject constructor(
             val connected = fitbitAuthManager.tryRestoreTokens()
             _state.update { it.copy(fitbitConnected = connected) }
         }
+    }
+
+    private fun loadGoogleHealthStatus() {
+        _state.update { it.copy(googleHealthSignedIn = googleHealthAuthManager.isAuthenticated) }
     }
 
     fun onFitbitConnected() {

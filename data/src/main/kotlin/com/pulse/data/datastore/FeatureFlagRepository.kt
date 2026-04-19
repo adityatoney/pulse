@@ -9,39 +9,27 @@ import javax.inject.Singleton
 
 /** UI-facing snapshot of [FeatureFlags], shielded from the generated proto type. */
 data class FeatureFlagSnapshot(
-    val sharedElementTransitions: Boolean,
-    val vicoGradientBars: Boolean,
     val wowMomOnDashboard: Boolean,
-    val googleHealthReconcile: Boolean,
     val forceDarkMode: Boolean,
     val faultInjectionActive: Boolean,
     val faultInjectionExpiresAtMs: Long,
     val useDynamicColor: Boolean,
-    val driveBackupEnabled: Boolean,
 ) {
     companion object {
         val Default = FeatureFlagSnapshot(
-            sharedElementTransitions = true,
-            vicoGradientBars = true,
             wowMomOnDashboard = true,
-            googleHealthReconcile = false,
             forceDarkMode = false,
             faultInjectionActive = false,
             faultInjectionExpiresAtMs = 0L,
             useDynamicColor = false,
-            driveBackupEnabled = false,
         )
     }
 }
 
 enum class FeatureFlagKey {
-    SharedElementTransitions,
-    VicoGradientBars,
     WowMomOnDashboard,
-    GoogleHealthReconcile,
     ForceDarkMode,
     UseDynamicColor,
-    DriveBackupEnabled,
 }
 
 @Singleton
@@ -55,13 +43,9 @@ class FeatureFlagRepository @Inject constructor(
         store.updateData { flags ->
             flags.toBuilder().apply {
                 when (key) {
-                    FeatureFlagKey.SharedElementTransitions -> sharedElementTransitions = value
-                    FeatureFlagKey.VicoGradientBars -> vicoGradientBars = value
                     FeatureFlagKey.WowMomOnDashboard -> wowMomOnDashboard = value
-                    FeatureFlagKey.GoogleHealthReconcile -> googleHealthReconcile = value
                     FeatureFlagKey.ForceDarkMode -> forceDarkMode = value
                     FeatureFlagKey.UseDynamicColor -> useDynamicColor = value
-                    FeatureFlagKey.DriveBackupEnabled -> driveBackupEnabled = value
                 }
             }.build()
         }
@@ -79,14 +63,10 @@ class FeatureFlagRepository @Inject constructor(
     }
 
     private fun FeatureFlags.toSnapshot() = FeatureFlagSnapshot(
-        sharedElementTransitions = sharedElementTransitions,
-        vicoGradientBars = vicoGradientBars,
         wowMomOnDashboard = wowMomOnDashboard,
-        googleHealthReconcile = googleHealthReconcile,
         forceDarkMode = forceDarkMode,
         faultInjectionActive = faultInjectionActive,
         faultInjectionExpiresAtMs = faultInjectionExpiresAtMs,
         useDynamicColor = useDynamicColor,
-        driveBackupEnabled = driveBackupEnabled,
     )
 }

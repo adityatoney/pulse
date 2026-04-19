@@ -89,6 +89,7 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Watch
 import kotlinx.coroutines.launch
 import com.pulse.data.cloud.DriveAuthOutcome
+import com.pulse.data.cloud.GoogleHealthAuthOutcome
 import com.pulse.core.designsystem.theme.Coral500
 import com.pulse.core.designsystem.theme.Forest300
 import com.pulse.core.designsystem.theme.Forest500
@@ -123,13 +124,27 @@ fun YouRoute(
     val coroutineScope = rememberCoroutineScope()
 
     // Launcher for Drive consent UI
-    val consentLauncher = rememberLauncherForActivityResult(
+    val driveConsentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
-        val activity = context as? android.app.Activity ?: return@rememberLauncherForActivityResult
+        val activity = context.findActivity() ?: return@rememberLauncherForActivityResult
         coroutineScope.launch {
             val tokenResult = viewModel.driveAuthManager.handleConsentResult(activity, result.data)
             viewModel.onSignInResult(
+                success = tokenResult.isSuccess,
+                message = tokenResult.exceptionOrNull()?.message,
+            )
+        }
+    }
+
+    // Launcher for Google Health consent UI
+    val healthConsentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val activity = context.findActivity() ?: return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val tokenResult = viewModel.googleHealthAuthManager.handleConsentResult(activity, result.data)
+            viewModel.onGoogleSignInResult(
                 success = tokenResult.isSuccess,
                 message = tokenResult.exceptionOrNull()?.message,
             )
@@ -147,7 +162,7 @@ fun YouRoute(
                         context.startActivity(intent)
                     }
                     YouEffect.LaunchDriveSignIn -> {
-                        val activity = context as? android.app.Activity ?: return@collect
+                        val activity = context.findActivity() ?: return@collect
                         coroutineScope.launch {
                             try {
                                 when (val outcome = viewModel.driveAuthManager.requestAuth(activity)) {
@@ -156,11 +171,29 @@ fun YouRoute(
                                     }
                                     is DriveAuthOutcome.ConsentRequired -> {
                                         val intentSenderRequest = IntentSenderRequest.Builder(outcome.pendingIntent).build()
-                                        consentLauncher.launch(intentSenderRequest)
+                                        driveConsentLauncher.launch(intentSenderRequest)
                                     }
                                 }
                             } catch (e: Exception) {
                                 viewModel.onSignInResult(success = false, message = e.message)
+                            }
+                        }
+                    }
+                    YouEffect.LaunchGoogleHealthAuth -> {
+                        val activity = context.findActivity() ?: return@collect
+                        coroutineScope.launch {
+                            try {
+                                when (val outcome = viewModel.googleHealthAuthManager.requestAuth(activity)) {
+                                    is GoogleHealthAuthOutcome.Authorized -> {
+                                        viewModel.onGoogleSignInResult(success = true, message = null)
+                                    }
+                                    is GoogleHealthAuthOutcome.ConsentRequired -> {
+                                        val intentSenderRequest = IntentSenderRequest.Builder(outcome.pendingIntent).build()
+                                        healthConsentLauncher.launch(intentSenderRequest)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                viewModel.onGoogleSignInResult(success = false, message = e.message)
                             }
                         }
                     }
@@ -204,10 +237,9 @@ fun YouScreen(
             item { HeartZoneVisual(state) }
             item { BodyStatsRow(state) }
             item { DataProvidersCard(state, onIntent) }
+            item { AppearanceCard(state, onIntent) }
             item { DisplayPrefsCard(state, onIntent) }
-            if (state.backupEnabled) {
-                item { CloudBackupCard(state, onIntent) }
-            }
+            item { CloudBackupCard(state, onIntent) }
         }
     }
 
@@ -650,6 +682,49 @@ private fun DataProvidersCard(state: YouState, onIntent: (YouIntent) -> Unit) {
                 onConnect = {},
                 onDisconnect = {},
             )
+
+            Spacer(Modifier.height(4.dp))
+
+            // Google Health — cloud reconciled data
+            ProviderRow(
+                name = "Google Health",
+                description = if (state.googleHealthSignedIn) "Connected" else "Cloud health archive",
+                connected = state.googleHealthSignedIn,
+                onConnect = { onIntent(YouIntent.GoogleHealthSignIn) },
+                onDisconnect = { onIntent(YouIntent.GoogleHealthSignOut) },
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Sync Now button
+            Button(
+                onClick = { onIntent(YouIntent.SyncNow) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Forest500),
+                enabled = !state.syncing,
+            ) {
+                if (state.syncing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Syncing...", style = MaterialTheme.typography.labelMedium)
+                } else {
+                    Text("Sync Now", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            state.syncMessage?.let { msg ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -715,6 +790,51 @@ private fun ProviderRow(
                     Text("Connect", style = MaterialTheme.typography.labelSmall)
                 }
             }
+        }
+    }
+}
+
+// ── Appearance Card ──────────────────────────────────────────────────────────
+
+@Composable
+private fun AppearanceCard(state: YouState, onIntent: (YouIntent) -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.Tune,
+                    contentDescription = null,
+                    tint = Forest500,
+                    modifier = Modifier.size(24.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Appearance",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            PrefToggleRow(
+                label = "Dark mode",
+                description = if (state.forceDarkMode) "Always dark" else "Follow system",
+                checked = state.forceDarkMode,
+                onCheckedChange = { onIntent(YouIntent.SetDarkMode(it)) },
+            )
+            PrefToggleRow(
+                label = "Dynamic colors",
+                description = if (state.useDynamicColor) "Material You wallpaper colors" else "Default theme",
+                checked = state.useDynamicColor,
+                onCheckedChange = { onIntent(YouIntent.SetDynamicColor(it)) },
+            )
         }
     }
 }
@@ -973,6 +1093,15 @@ private fun CloudBackupCard(state: YouState, onIntent: (YouIntent) -> Unit) {
             }
         }
     }
+}
+
+private fun android.content.Context.findActivity(): android.app.Activity? {
+    var ctx = this
+    while (ctx is android.content.ContextWrapper) {
+        if (ctx is android.app.Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
 }
 
 private fun snapTo(value: Float, step: Int): Float {

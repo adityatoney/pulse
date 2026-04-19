@@ -4,8 +4,6 @@ import com.pulse.data.datastore.FeatureFlagKey
 import com.pulse.data.datastore.FeatureFlagSnapshot
 import com.pulse.domain.repository.DebugBuildInfo
 
-enum class SyncWorkerState { Idle, Enqueued, Running, Succeeded, Failed }
-
 data class DebugMenuState(
     val featureFlags: FeatureFlagSnapshot = FeatureFlagSnapshot.Default,
     val buildInfo: DebugBuildInfo? = null,
@@ -17,17 +15,7 @@ data class DebugMenuState(
     val dataRangeEnd: String? = null,
     val totalStepDays: Int = 0,
     val totalExerciseSessions: Int = 0,
-    val syncWindowStart: String? = null,
-    val syncWindowEnd: String? = null,
-    val syncWorkerState: SyncWorkerState = SyncWorkerState.Idle,
-    val googleHealthSignedIn: Boolean = false,
-    val fitbitSignedIn: Boolean = false,
-    val fitbitSyncCursor: String? = null,
-    val fitbitSyncProgress: String? = null,
     val totalSleepSessions: Int = 0,
-    val metricCounts: Map<String, Int> = emptyMap(),
-    val backfillCursor: String? = null,
-    val backfillComplete: Boolean = false,
 )
 
 enum class ConfirmAction { ClearCache, HardReset }
@@ -41,18 +29,8 @@ sealed interface DebugMenuIntent {
     data class ConfirmDestructive(val action: ConfirmAction) : DebugMenuIntent
     data object CancelConfirm : DebugMenuIntent
     data object ExportCsv : DebugMenuIntent
-    data object ForceSyncNow : DebugMenuIntent
-    data object SimulateNetworkFailure : DebugMenuIntent
-    data object OpenHealthConnect : DebugMenuIntent
-    data object ResetChangeToken : DebugMenuIntent
-    data object DumpRecords : DebugMenuIntent
-    data class ToggleFlag(val key: FeatureFlagKey, val value: Boolean) : DebugMenuIntent
-    data object GoogleHealthSignIn : DebugMenuIntent
-    data object GoogleHealthSignOut : DebugMenuIntent
-    data object FitbitSignIn : DebugMenuIntent
-    data object FitbitSignOut : DebugMenuIntent
-    data object ForceFitbitSync : DebugMenuIntent
     data object ExportBackup : DebugMenuIntent
+    data class ToggleFlag(val key: FeatureFlagKey, val value: Boolean) : DebugMenuIntent
     data object Dismiss : DebugMenuIntent
 }
 
@@ -60,9 +38,5 @@ sealed interface DebugMenuEffect {
     /** Absolute file path on disk; the screen wraps it in a FileProvider Uri. */
     data class ShareCsv(val filePath: String) : DebugMenuEffect
     data class Snackbar(val message: String) : DebugMenuEffect
-    data object OpenHealthConnectApp : DebugMenuEffect
     data object NavigateBack : DebugMenuEffect
-    data class NavigateToRecordDump(val records: String) : DebugMenuEffect
-    data object LaunchGoogleSignIn : DebugMenuEffect
-    data object LaunchFitbitSignIn : DebugMenuEffect
 }

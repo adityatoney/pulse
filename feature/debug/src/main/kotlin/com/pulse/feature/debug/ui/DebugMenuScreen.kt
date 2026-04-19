@@ -1,7 +1,6 @@
 package com.pulse.feature.debug.ui
 
 import android.content.Intent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,13 +8,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -31,7 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -42,9 +36,7 @@ import com.pulse.feature.debug.state.ConfirmAction
 import com.pulse.feature.debug.state.DebugMenuEffect
 import com.pulse.feature.debug.state.DebugMenuIntent
 import com.pulse.feature.debug.state.DebugMenuState
-import com.pulse.feature.debug.state.SyncWorkerState
 import com.pulse.feature.debug.viewmodel.DebugMenuViewModel
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,7 +48,6 @@ fun DebugMenuRoute(
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val coroutineScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
 
     LaunchedEffect(viewModel) {
         viewModel.effects
@@ -78,28 +69,7 @@ fun DebugMenuRoute(
                         context.startActivity(Intent.createChooser(send, "Export data"))
                     }
                     is DebugMenuEffect.Snackbar -> Unit
-                    DebugMenuEffect.OpenHealthConnectApp -> {
-                        val intent = context.packageManager
-                            .getLaunchIntentForPackage("com.google.android.apps.healthdata")
-                            ?: Intent(Intent.ACTION_VIEW, "market://details?id=com.google.android.apps.healthdata".toUri())
-                        context.startActivity(intent)
-                    }
                     DebugMenuEffect.NavigateBack -> onDismiss()
-                    is DebugMenuEffect.NavigateToRecordDump -> Unit
-                    DebugMenuEffect.LaunchGoogleSignIn -> {
-                        val activity = context as? android.app.Activity ?: return@collect
-                        coroutineScope.launch {
-                            val result = viewModel.authManager.signIn(activity)
-                            viewModel.onSignInResult(
-                                success = result.isSuccess,
-                                message = result.exceptionOrNull()?.message,
-                            )
-                        }
-                    }
-                    DebugMenuEffect.LaunchFitbitSignIn -> {
-                        val intent = viewModel.fitbitAuthManager.buildAuthIntent()
-                        context.startActivity(intent)
-                    }
                 }
             }
     }
@@ -157,133 +127,33 @@ private fun DebugMenuSheetBody(
             onIntent(DebugMenuIntent.ExportBackup)
         }
 
-        SectionHeader("Sync")
-        SyncActionItem(state.syncWorkerState) {
-            onIntent(DebugMenuIntent.ForceSyncNow)
-        }
-        ActionItem("Simulate network failure", "60s fault injection") {
-            onIntent(DebugMenuIntent.SimulateNetworkFailure)
-        }
-
-        SectionHeader("Health Connect")
-        ActionItem("Open HC app", "com.google.android.apps.healthdata") {
-            onIntent(DebugMenuIntent.OpenHealthConnect)
-        }
-        ActionItem("Dump raw records (today)", "View each HC record") {
-            onIntent(DebugMenuIntent.DumpRecords)
-        }
-        ActionItem("Reset change token", "Next sync reads full day") {
-            onIntent(DebugMenuIntent.ResetChangeToken)
-        }
-
-        SectionHeader("Google Health API")
-        if (state.googleHealthSignedIn) {
-            InfoLine("Status", "Signed in")
-            ActionItem("Sign out", "Clears OAuth tokens") {
-                onIntent(DebugMenuIntent.GoogleHealthSignOut)
-            }
-        } else {
-            InfoLine("Status", "Not signed in (session-only)")
-            ActionItem("Sign in with Google", "Token not persisted across restarts") {
-                onIntent(DebugMenuIntent.GoogleHealthSignIn)
-            }
-        }
-
-        SectionHeader("Fitbit API")
-        if (state.fitbitSignedIn) {
-            InfoLine("Status", "Connected")
-            state.fitbitSyncCursor?.let { InfoLine("Last synced to", it) }
-            state.fitbitSyncProgress?.let {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-            ActionItem("Force Fitbit sync", "Fetches all history from Fitbit cloud") {
-                onIntent(DebugMenuIntent.ForceFitbitSync)
-            }
-            ActionItem("Disconnect Fitbit", "Clears OAuth tokens") {
-                onIntent(DebugMenuIntent.FitbitSignOut)
-            }
-        } else {
-            InfoLine("Status", "Not connected")
-            ActionItem("Connect Fitbit", "OAuth sign-in for unlimited history") {
-                onIntent(DebugMenuIntent.FitbitSignIn)
-            }
-        }
-
         SectionHeader("Feature flags")
-        FlagRow(
-            "Shared-element transitions",
-            state.featureFlags.sharedElementTransitions,
-        ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.SharedElementTransitions, it)) }
-        FlagRow(
-            "Vico gradient bars",
-            state.featureFlags.vicoGradientBars,
-        ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.VicoGradientBars, it)) }
         FlagRow(
             "WoW/MoM on dashboard",
             state.featureFlags.wowMomOnDashboard,
         ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.WowMomOnDashboard, it)) }
-        FlagRow(
-            "Google Health reconciliation",
-            state.featureFlags.googleHealthReconcile,
-        ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.GoogleHealthReconcile, it)) }
-        FlagRow(
-            "Force dark mode",
-            state.featureFlags.forceDarkMode,
-        ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.ForceDarkMode, it)) }
-        FlagRow(
-            "Use dynamic color",
-            state.featureFlags.useDynamicColor,
-        ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.UseDynamicColor, it)) }
-        FlagRow(
-            "Drive backup (You screen)",
-            state.featureFlags.driveBackupEnabled,
-        ) { onIntent(DebugMenuIntent.ToggleFlag(FeatureFlagKey.DriveBackupEnabled, it)) }
 
         SectionHeader("Data Coverage")
-        val rangeText = if (state.dataRangeStart != null && state.dataRangeEnd != null) {
-            "${state.dataRangeStart} to ${state.dataRangeEnd}"
+        if (state.dataRangeStart != null && state.dataRangeEnd != null) {
+            Text(
+                text = "${state.dataRangeStart} \u2013 ${state.dataRangeEnd}",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            Text(
+                text = "${state.totalStepDays} step days \u00b7 ${state.totalExerciseSessions} exercises \u00b7 ${state.totalSleepSessions} sleep",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
         } else {
-            "No data"
+            Text(
+                text = "No data",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
         }
-        InfoLine("Step data range", rangeText)
-        InfoLine("Step days", "${state.totalStepDays}")
-        InfoLine("Exercise sessions", "${state.totalExerciseSessions}")
-        InfoLine("Sleep sessions", "${state.totalSleepSessions}")
-        state.metricCounts.entries
-            .sortedByDescending { it.value }
-            .filter { it.key != "Steps" }
-            .forEach { (metric, count) ->
-                InfoLine(metric, "$count days")
-            }
-
-        SectionHeader("Background Sync")
-        val backfillStatus = when {
-            state.backfillComplete -> "Complete"
-            state.backfillCursor != null -> "In progress (cursor: ${state.backfillCursor})"
-            else -> "Not started"
-        }
-        InfoLine("History backfill", backfillStatus)
-        val syncWindowText = if (state.syncWindowStart != null && state.syncWindowEnd != null) {
-            "${state.syncWindowStart} to ${state.syncWindowEnd}"
-        } else {
-            "N/A"
-        }
-        InfoLine("Periodic sync window", syncWindowText)
 
         SectionHeader("Info")
         state.buildInfo?.let { info ->
@@ -387,48 +257,5 @@ private fun InfoLine(label: String, value: String) {
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
-@Composable
-private fun SyncActionItem(syncState: SyncWorkerState, onClick: () -> Unit) {
-    val isBusy = syncState == SyncWorkerState.Enqueued || syncState == SyncWorkerState.Running
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text("Force sync now", style = MaterialTheme.typography.bodyLarge)
-            val subtitle = when (syncState) {
-                SyncWorkerState.Idle -> "Fetches 1 year of HC data"
-                SyncWorkerState.Enqueued -> "Waiting to start..."
-                SyncWorkerState.Running -> "Syncing from Health Connect..."
-                SyncWorkerState.Succeeded -> "Sync completed"
-                SyncWorkerState.Failed -> "Sync failed"
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (isBusy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = when (syncState) {
-                        SyncWorkerState.Succeeded -> MaterialTheme.colorScheme.primary
-                        SyncWorkerState.Failed -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-        }
-        TextButton(onClick = onClick, enabled = !isBusy) { Text("Run") }
     }
 }

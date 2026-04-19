@@ -10,5 +10,4 @@ android {
 dependencies {
     implementation(project(":data"))
     implementation(libs.kotlinx.serialization.json)
-    implementation(libs.androidx.work.runtime.ktx)
 }
