@@ -2,15 +2,19 @@ package com.pulse.feature.insights.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +37,7 @@ import com.pulse.core.ui.insights.InsightCard
 import com.pulse.core.ui.insights.InsightSentimentUi
 import com.pulse.domain.model.InsightSentiment
 import com.pulse.domain.model.InsightType
+import com.pulse.domain.model.MetricType
 import com.pulse.feature.insights.state.InsightsEffect
 import com.pulse.feature.insights.state.InsightsIntent
 import com.pulse.feature.insights.state.InsightsState
@@ -45,6 +50,7 @@ import com.pulse.feature.insights.viewmodel.InsightsViewModel
 @Composable
 fun InsightsRoute(
     onBack: () -> Unit,
+    onNavigateToHeatmap: (String) -> Unit = {},
     viewModel: InsightsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -56,6 +62,7 @@ fun InsightsRoute(
             .collect { effect ->
                 when (effect) {
                     InsightsEffect.NavigateBack -> onBack()
+                    is InsightsEffect.NavigateToHeatmapDetail -> onNavigateToHeatmap(effect.metric)
                 }
             }
     }
@@ -167,11 +174,18 @@ fun InsightsScreen(
                 Spacer(Modifier.height(8.dp))
                 SectionHeader("Big Picture")
 
+                // Metric picker chips
+                HeatmapMetricChips(
+                    selected = state.heatmapMetric,
+                    onSelect = { onIntent(InsightsIntent.ChangeHeatmapMetric(it)) },
+                )
+
                 // 3-month activity heatmap
                 if (state.heatmapDays.isNotEmpty()) {
                     ActivityHeatmap(
                         days = state.heatmapDays,
                         todayDate = state.heatmapDays.maxByOrNull { it.date }?.date ?: "",
+                        onViewAll = { onIntent(InsightsIntent.OpenHeatmapDetail) },
                     )
                 }
 
@@ -218,6 +232,40 @@ private fun insightGroupLabel(type: InsightType): String = when (type) {
     InsightType.Streak -> "Streaks"
     InsightType.PersonalRecord -> "Records"
     else -> "Other"
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HeatmapMetricChips(
+    selected: MetricType,
+    onSelect: (MetricType) -> Unit,
+) {
+    val metrics = listOf(
+        MetricType.Steps,
+        MetricType.Distance,
+        MetricType.ActiveCalories,
+        MetricType.ZoneMinutes,
+    )
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp),
+    ) {
+        items(metrics) { metric ->
+            FilterChip(
+                selected = metric == selected,
+                onClick = { onSelect(metric) },
+                label = { Text(heatmapChipLabel(metric)) },
+            )
+        }
+    }
+}
+
+private fun heatmapChipLabel(metric: MetricType): String = when (metric) {
+    MetricType.Steps -> "Steps"
+    MetricType.Distance -> "Distance"
+    MetricType.ActiveCalories -> "Calories"
+    MetricType.ZoneMinutes -> "Zone Min"
+    else -> metric.name
 }
 
 private fun InsightSentiment.toUi(): InsightSentimentUi = when (this) {

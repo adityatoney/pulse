@@ -142,6 +142,13 @@ class FitbitRestClient @Inject constructor(
         return authedGet("$BASE_URL/1/user/-/spo2/date/$date.json")
     }
 
+    /**
+     * Fetch paired devices (trackers, scales) and their battery status.
+     */
+    suspend fun fetchDevices(): List<FitbitDevice> {
+        return authedGet<List<FitbitDevice>>("$BASE_URL/1/user/-/devices.json") ?: emptyList()
+    }
+
     fun getRateLimitRemaining(): Int = rateLimitRemaining
 
     private suspend inline fun <reified T> authedGet(url: String): T? {

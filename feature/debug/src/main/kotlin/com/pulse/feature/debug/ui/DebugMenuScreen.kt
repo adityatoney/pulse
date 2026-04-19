@@ -126,6 +126,12 @@ private fun DebugMenuSheetBody(
         ActionItem("Export backup as JSON", "Full DB snapshot, shareable") {
             onIntent(DebugMenuIntent.ExportBackup)
         }
+        ActionItem("Recompute all summaries", "Rebuilds from raw data (~5 yrs)") {
+            onIntent(DebugMenuIntent.RecomputeAllSummaries)
+        }
+        ActionItem("Reset Fitbit sync cursor", "Next sync backfills all history") {
+            onIntent(DebugMenuIntent.ResetFitbitCursor)
+        }
 
         SectionHeader("Feature flags")
         FlagRow(

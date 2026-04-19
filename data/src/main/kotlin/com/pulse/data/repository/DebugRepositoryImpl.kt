@@ -343,7 +343,7 @@ class DebugRepositoryImpl @Inject constructor(
         )
     }
 
-    override suspend fun pendingQueueSize(): Int = db.summaryDailyMetricDao().dirtyCount()
+    override suspend fun pendingQueueSize(): Int = db.computeQueueDao().count()
 
     override suspend fun fitbitSyncCursor(): String? =
         db.syncStateDao().get("fitbit_sync_cursor")?.value

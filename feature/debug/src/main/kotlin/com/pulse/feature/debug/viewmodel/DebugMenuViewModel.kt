@@ -2,7 +2,9 @@ package com.pulse.feature.debug.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.pulse.data.compute.SummaryComputeEngine
 import com.pulse.data.datastore.FeatureFlagRepository
+import com.pulse.data.local.dao.SyncStateDao
 import com.pulse.domain.repository.DebugRepository
 import com.pulse.domain.util.Clock
 import com.pulse.feature.debug.state.ConfirmAction
@@ -11,6 +13,7 @@ import com.pulse.feature.debug.state.DebugMenuIntent
 import com.pulse.feature.debug.state.DebugMenuState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.datetime.DatePeriod
 import kotlinx.datetime.TimeZone
@@ -30,6 +34,8 @@ import javax.inject.Inject
 class DebugMenuViewModel @Inject constructor(
     private val debug: DebugRepository,
     private val featureFlags: FeatureFlagRepository,
+    private val computeEngine: SummaryComputeEngine,
+    private val syncStateDao: SyncStateDao,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -44,6 +50,14 @@ class DebugMenuViewModel @Inject constructor(
             _state.update { it.copy(featureFlags = flags) }
         }.launchIn(viewModelScope)
         onIntent(DebugMenuIntent.Load)
+        // Poll pending queue size every 2 seconds
+        viewModelScope.launch {
+            while (isActive) {
+                delay(2000)
+                val queue = debug.pendingQueueSize()
+                _state.update { it.copy(pendingQueueSize = queue) }
+            }
+        }
     }
 
     fun onIntent(intent: DebugMenuIntent) {
@@ -104,6 +118,18 @@ class DebugMenuViewModel @Inject constructor(
                 }.onFailure { e ->
                     _state.update { it.copy(inFlight = false, lastAction = "Export failed: ${e.message}") }
                 }
+            }
+            DebugMenuIntent.RecomputeAllSummaries -> viewModelScope.launch {
+                _state.update { it.copy(inFlight = true, lastAction = "Recomputing all summaries...") }
+                // Enqueue on this scope, but process on app-scoped coroutine
+                // so it survives bottom sheet dismissal
+                computeEngine.recomputeAll(days = 1900)
+                _state.update { it.copy(inFlight = false, lastAction = "Recomputed all summaries") }
+                _effects.trySend(DebugMenuEffect.Snackbar("All summaries recomputed"))
+            }
+            DebugMenuIntent.ResetFitbitCursor -> viewModelScope.launch {
+                syncStateDao.remove("fitbit_sync_cursor")
+                _state.update { it.copy(lastAction = "Fitbit cursor reset — next sync will backfill all history") }
             }
             is DebugMenuIntent.ToggleFlag -> viewModelScope.launch {
                 featureFlags.setFlag(intent.key, intent.value)

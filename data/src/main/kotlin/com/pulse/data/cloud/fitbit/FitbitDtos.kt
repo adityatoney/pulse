@@ -168,6 +168,18 @@ data class FitbitWeightLog(
     val fat: Double? = null, // body fat %
 )
 
+// ---- Devices (/1/user/-/devices.json) ----
+
+@Serializable
+data class FitbitDevice(
+    val id: String,
+    val deviceVersion: String,   // e.g. "Sense 2", "Charge 5"
+    val type: String,            // "TRACKER" or "SCALE"
+    val battery: String,         // "High", "Medium", "Low", "Empty"
+    val batteryLevel: Int? = null, // 0-100 (not always present)
+    val lastSyncTime: String? = null,
+)
+
 // ---- SpO2 (/1/user/-/spo2/date/{date}.json) ----
 
 @Serializable

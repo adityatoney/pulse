@@ -30,6 +30,8 @@ sealed interface DebugMenuIntent {
     data object CancelConfirm : DebugMenuIntent
     data object ExportCsv : DebugMenuIntent
     data object ExportBackup : DebugMenuIntent
+    data object RecomputeAllSummaries : DebugMenuIntent
+    data object ResetFitbitCursor : DebugMenuIntent
     data class ToggleFlag(val key: FeatureFlagKey, val value: Boolean) : DebugMenuIntent
     data object Dismiss : DebugMenuIntent
 }

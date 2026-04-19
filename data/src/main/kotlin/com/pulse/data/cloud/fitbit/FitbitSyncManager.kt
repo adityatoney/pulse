@@ -74,8 +74,8 @@ class FitbitSyncManager @Inject constructor(
         emitProgress("Phase 4/4: Vitals (HR, weight)...")
         syncVitals(startDate, today)
 
-        // Trigger summary computation from raw data
-        computeEngine.processQueue()
+        // Trigger summary computation from raw data — drain fully
+        computeEngine.processQueueAll()
 
         saveCursor(today)
         emitProgress("Sync complete: $startDate → $today")

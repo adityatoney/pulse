@@ -45,7 +45,9 @@ import com.pulse.feature.exercise.navigation.ExerciseDetail
 import com.pulse.feature.exercise.navigation.ExerciseLog
 import com.pulse.feature.exercise.navigation.exerciseDetailScreen
 import com.pulse.feature.exercise.navigation.exerciseLogScreen
+import com.pulse.feature.insights.navigation.HeatmapDetail
 import com.pulse.feature.insights.navigation.Insights
+import com.pulse.feature.insights.navigation.heatmapDetailScreen
 import com.pulse.feature.insights.navigation.insightsScreen
 import com.pulse.feature.you.navigation.YouProfile
 import com.pulse.feature.you.navigation.youScreen
@@ -248,7 +250,11 @@ fun FitbitNavHost(hcDataSource: HealthConnectDataSource) {
         )
         exerciseDetailScreen(onBack = { nav.popBackStack() })
         youScreen(onBack = { nav.popBackStack() })
-        insightsScreen(onBack = { nav.popBackStack() })
+        insightsScreen(
+            onBack = { nav.popBackStack() },
+            onNavigateToHeatmap = { metric -> nav.navigate(HeatmapDetail(metric)) },
+        )
+        heatmapDetailScreen(onBack = { nav.popBackStack() })
         debugMenuScreen(onDismiss = { nav.popBackStack() })
     }
 }

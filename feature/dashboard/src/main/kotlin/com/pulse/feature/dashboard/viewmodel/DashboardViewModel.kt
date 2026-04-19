@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
@@ -72,8 +73,23 @@ class DashboardViewModel @Inject constructor(
     private val intents =
         MutableSharedFlow<DashboardIntent>(extraBufferCapacity = 16)
 
+    private var dateStreamsJob: Job? = null
+
     init {
         intents.onEach(::reduce).launchIn(viewModelScope)
+
+        // Streams that don't depend on date — collected once
+        observeDevice().onEach { device ->
+            _state.update { it.copy(device = device) }
+        }.launchIn(viewModelScope)
+
+        observeSync().onEach { sync ->
+            _state.update { it.copy(sync = sync) }
+        }.launchIn(viewModelScope)
+
+        observeUser().onEach { chrome ->
+            _state.update { it.copy(user = chrome) }
+        }.launchIn(viewModelScope)
 
         wireStreams()
         onIntent(DashboardIntent.Load)
@@ -82,58 +98,54 @@ class DashboardViewModel @Inject constructor(
     fun onIntent(intent: DashboardIntent) { intents.tryEmit(intent) }
 
     private fun wireStreams() {
-        val date = _state.value.selectedDate
-        combine(
-            getToday(date),
-            calcWoW(MetricType.Steps, date),
-            calcMoM(MetricType.Steps, date),
-            observeSync(),
-            observeDevice(),
-        ) { today, wow, mom, sync, device ->
-            Quint(today, wow, mom, sync, device)
-        }.onEach { (today, wow, mom, sync, device) ->
-            _state.update {
-                it.copy(
-                    isLoading = false,
-                    metrics = today.today,
-                    recovery = today.recovery,
-                    wow = wow,
-                    mom = mom,
-                    sync = sync,
-                    device = device,
-                )
-            }
-        }.catch { t ->
-            _state.update { it.copy(isLoading = false, error = com.pulse.feature.dashboard.state.DashboardError.Unknown(t.message ?: "Error")) }
-        }.launchIn(viewModelScope)
+        dateStreamsJob?.cancel()
+        dateStreamsJob = viewModelScope.launch {
+            val date = _state.value.selectedDate
 
-        observeUser().onEach { chrome ->
-            _state.update { it.copy(user = chrome) }
-        }.launchIn(viewModelScope)
+            combine(
+                getToday(date),
+                calcWoW(MetricType.Steps, date),
+                calcMoM(MetricType.Steps, date),
+            ) { today, wow, mom ->
+                Triple(today, wow, mom)
+            }.onEach { (today, wow, mom) ->
+                _state.update {
+                    it.copy(
+                        isLoading = false,
+                        metrics = today.today,
+                        recovery = today.recovery,
+                        wow = wow,
+                        mom = mom,
+                    )
+                }
+            }.catch { t ->
+                _state.update { it.copy(isLoading = false, error = com.pulse.feature.dashboard.state.DashboardError.Unknown(t.message ?: "Error")) }
+            }.launchIn(this)
 
-        health.observeExerciseSessions(DateRange(date, date)).onEach { sessions ->
-            _state.update { it.copy(recentExercises = sessions) }
-        }.launchIn(viewModelScope)
+            health.observeExerciseSessions(DateRange(date, date)).onEach { sessions ->
+                _state.update { it.copy(recentExercises = sessions) }
+            }.launchIn(this)
 
-        getInsights(date.toString(), "Dashboard", limit = 3).onEach { insights ->
-            _state.update { it.copy(insights = insights) }
-        }.launchIn(viewModelScope)
+            getInsights(date.toString(), "Dashboard", limit = 3).onEach { insights ->
+                _state.update { it.copy(insights = insights) }
+            }.launchIn(this)
 
-        combine(
-            health.observeDailyAggregate(date, MetricType.RestingHeartRate),
-            health.observeDailyAggregate(date, MetricType.Weight),
-            health.observeDailyAggregate(date, MetricType.SpO2),
-            health.observeDailyAggregate(date, MetricType.HRV),
-        ) { rhr, weight, spo2, hrv ->
-            _state.update {
-                it.copy(
-                    restingHr = rhr.total.takeIf { v -> v > 0 },
-                    weight = weight.total.takeIf { v -> v > 0 },
-                    spo2 = spo2.total.takeIf { v -> v > 0 },
-                    hrv = hrv.total.takeIf { v -> v > 0 },
-                )
-            }
-        }.launchIn(viewModelScope)
+            combine(
+                health.observeDailyAggregate(date, MetricType.RestingHeartRate),
+                health.observeDailyAggregate(date, MetricType.Weight),
+                health.observeDailyAggregate(date, MetricType.SpO2),
+                health.observeDailyAggregate(date, MetricType.HRV),
+            ) { rhr, weight, spo2, hrv ->
+                _state.update {
+                    it.copy(
+                        restingHr = rhr.total.takeIf { v -> v > 0 },
+                        weight = weight.total.takeIf { v -> v > 0 },
+                        spo2 = spo2.total.takeIf { v -> v > 0 },
+                        hrv = hrv.total.takeIf { v -> v > 0 },
+                    )
+                }
+            }.launchIn(this)
+        }
     }
 
     private suspend fun reduce(intent: DashboardIntent) {
@@ -172,7 +184,7 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
-    private data class Quint<A, B, C, D, E>(val a: A, val b: B, val c: C, val d: D, val e: E)
+
 
     companion object {
         private const val KEY_DATE = "selected_date"

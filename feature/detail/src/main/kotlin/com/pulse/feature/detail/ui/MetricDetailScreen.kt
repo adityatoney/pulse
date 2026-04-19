@@ -40,6 +40,8 @@ import androidx.lifecycle.flowWithLifecycle
 import com.pulse.core.designsystem.theme.LocalRingPalette
 import com.pulse.core.ui.badges.DeltaDirection
 import com.pulse.core.ui.badges.WoWMoMBadge
+import com.pulse.core.ui.charts.MetricBar
+import com.pulse.core.ui.charts.MetricBarsChart
 import com.pulse.core.ui.insights.InsightCard
 import com.pulse.core.ui.insights.InsightSentimentUi
 import com.pulse.core.ui.list.PeriodComparisonList
@@ -117,21 +119,31 @@ fun MetricDetailScreen(
             item { HeadlineBlock(state) }
             item {
                 val points = state.series?.points.orEmpty()
-                val values = points.map { it.value.toFloat() }
-                val chartGoal = scaledGoal(state)
                 val labels = barLabels(state)
-                MetricBarChart(
-                    values = values,
-                    goal = chartGoal,
-                    labels = labels,
+                val goalValue = scaledGoal(state)?.toDouble() ?: 0.0
+                val today = kotlinx.datetime.Clock.System.now()
+                    .toLocalDateTime(TimeZone.currentSystemDefault()).date
+                val zone = TimeZone.currentSystemDefault()
+                MetricBarsChart(
+                    bars = points.mapIndexed { i, point ->
+                        MetricBar(
+                            label = labels.getOrElse(i) { "" },
+                            value = point.value,
+                            goal = goalValue,
+                            isHighlighted = when (state.timeframe) {
+                                Timeframe.Day -> false
+                                Timeframe.Week -> {
+                                    val d = point.bucketStart.toLocalDateTime(zone).date
+                                    d == today
+                                }
+                                else -> false
+                            },
+                        )
+                    },
+                    formatValue = { v -> formatBarValue(v.toFloat(), state.metric) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
-                    selectedIndex = state.selectedBarIndex,
-                    formatValue = { v -> formatBarValue(v, state.metric) },
-                    onBarTapped = { index ->
-                        onIntent(MetricDetailIntent.SelectBar(index))
-                    },
                 )
             }
             item {
@@ -406,7 +418,11 @@ private fun formatBarValue(v: Float, metric: MetricType): String = when (metric)
     MetricType.Distance -> "%.2f".format(v)
     MetricType.Weight, MetricType.BodyFat, MetricType.SpO2, MetricType.SkinTemperature,
     MetricType.HRV, MetricType.VO2Max -> "%.1f".format(v)
-    else -> "%,d".format(v.toInt())
+    else -> when {
+        v >= 100_000f -> "${(v / 1000).toInt()}k"
+        v >= 10_000f -> "${"%.1f".format(v / 1000)}k"
+        else -> "%,d".format(v.toInt())
+    }
 }
 
 private fun InsightSentiment.toDetailUi(): InsightSentimentUi = when (this) {

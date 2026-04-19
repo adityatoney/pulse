@@ -45,6 +45,9 @@ interface ExerciseSessionDao {
     @Query("SELECT COUNT(*) FROM exercise_sessions")
     suspend fun totalCount(): Int
 
+    @Query("DELETE FROM exercise_sessions WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
+
     @Query("DELETE FROM exercise_sessions")
     suspend fun clear()
 

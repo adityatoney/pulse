@@ -287,7 +287,7 @@ class HealthConnectDataSource @Inject constructor(
     sealed interface ChangesResult {
         data class Success(
             val upsertedRecordTypes: Set<KClass<out androidx.health.connect.client.records.Record>>,
-            val deletionCount: Int,
+            val deletedIds: List<String>,
             val nextToken: String,
         ) : ChangesResult
         data object TokenExpired : ChangesResult
@@ -296,7 +296,7 @@ class HealthConnectDataSource @Inject constructor(
     suspend fun getChanges(token: String): ChangesResult {
         val c = client ?: return ChangesResult.TokenExpired
         val upsertedTypes = mutableSetOf<KClass<out androidx.health.connect.client.records.Record>>()
-        var deletions = 0
+        val deletedIds = mutableListOf<String>()
         var currentToken = token
         do {
             val response = c.getChanges(currentToken)
@@ -304,14 +304,14 @@ class HealthConnectDataSource @Inject constructor(
             for (change in response.changes) {
                 when (change) {
                     is UpsertionChange -> upsertedTypes.add(change.record::class)
-                    is DeletionChange -> deletions++
+                    is DeletionChange -> deletedIds.add(change.recordId)
                 }
             }
             currentToken = response.nextChangesToken
         } while (response.hasMore)
         return ChangesResult.Success(
             upsertedRecordTypes = upsertedTypes,
-            deletionCount = deletions,
+            deletedIds = deletedIds,
             nextToken = currentToken,
         )
     }

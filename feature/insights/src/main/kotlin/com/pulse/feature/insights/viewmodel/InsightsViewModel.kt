@@ -17,6 +17,7 @@ import com.pulse.feature.insights.state.InsightsIntent
 import com.pulse.feature.insights.state.InsightsState
 import com.pulse.feature.insights.state.MetricPosition
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +48,8 @@ class InsightsViewModel @Inject constructor(
     private val _effects = Channel<InsightsEffect>(Channel.BUFFERED)
     val effects: Flow<InsightsEffect> = _effects.receiveAsFlow()
 
+    private var heatmapJob: Job? = null
+
     init {
         wireStreams()
     }
@@ -55,6 +58,14 @@ class InsightsViewModel @Inject constructor(
         when (intent) {
             InsightsIntent.Load -> wireStreams()
             InsightsIntent.Back -> _effects.trySend(InsightsEffect.NavigateBack)
+            is InsightsIntent.ChangeHeatmapMetric -> {
+                _state.update { it.copy(heatmapMetric = intent.metric) }
+                loadHeatmap(intent.metric)
+            }
+            InsightsIntent.OpenHeatmapDetail -> {
+                val metric = _state.value.heatmapMetric
+                _effects.trySend(InsightsEffect.NavigateToHeatmapDetail(metric.name))
+            }
         }
     }
 
@@ -96,23 +107,8 @@ class InsightsViewModel @Inject constructor(
             _state.update { it.copy(weeklyBars = bars) }
         }.launchIn(viewModelScope)
 
-        // ── Visual: 90-day heatmap ──
-
-        val ninetyDaysAgo = todayDate.minus(DatePeriod(days = 90))
-        healthRepo.observeSeries(
-            MetricType.Steps,
-            DateRange(ninetyDaysAgo, todayDate),
-            Bucket.Day,
-        ).onEach { series ->
-            val maxVal = series.points.maxOfOrNull { it.value }?.coerceAtLeast(1.0) ?: 1.0
-            val days = series.points.map { point ->
-                HeatmapDay(
-                    date = point.bucketStart.toLocalDateTime(tz).date.toString(),
-                    intensity = (point.value / maxVal).toFloat().coerceIn(0f, 1f),
-                )
-            }
-            _state.update { it.copy(heatmapDays = days) }
-        }.launchIn(viewModelScope)
+        // ── Visual: heatmap ──
+        loadHeatmap(_state.value.heatmapMetric)
 
         // ── Visual: 30-day position strip ──
 
@@ -140,6 +136,31 @@ class InsightsViewModel @Inject constructor(
         }.launchIn(viewModelScope)
     }
 
+    private fun loadHeatmap(metric: MetricType) {
+        heatmapJob?.cancel()
+        val todayDate = clock.today()
+        val tz = TimeZone.currentSystemDefault()
+        val ninetyDaysAgo = todayDate.minus(DatePeriod(days = 90))
+        val label = metricLabel(metric)
+
+        heatmapJob = healthRepo.observeSeries(
+            metric,
+            DateRange(ninetyDaysAgo, todayDate),
+            Bucket.Day,
+        ).onEach { series ->
+            val maxVal = series.points.maxOfOrNull { it.value }?.coerceAtLeast(1.0) ?: 1.0
+            val days = series.points.map { point ->
+                HeatmapDay(
+                    date = point.bucketStart.toLocalDateTime(tz).date.toString(),
+                    intensity = (point.value / maxVal).toFloat().coerceIn(0f, 1f),
+                    rawValue = point.value,
+                    metricLabel = label,
+                )
+            }
+            _state.update { it.copy(heatmapDays = days) }
+        }.launchIn(viewModelScope)
+    }
+
     companion object {
         private const val DEFAULT_STEP_GOAL = 10_000.0
 
@@ -151,6 +172,17 @@ class InsightsViewModel @Inject constructor(
             DayOfWeek.FRIDAY -> "F"
             DayOfWeek.SATURDAY -> "S"
             DayOfWeek.SUNDAY -> "S"
+            else -> ""
+        }
+
+        fun metricLabel(metric: MetricType): String = when (metric) {
+            MetricType.Steps -> "steps"
+            MetricType.Distance -> "mi"
+            MetricType.Calories, MetricType.ActiveCalories -> "cal"
+            MetricType.ZoneMinutes -> "zone min"
+            MetricType.Sleep -> "hrs"
+            MetricType.HeartRate -> "bpm"
+            MetricType.Floors -> "floors"
             else -> ""
         }
     }

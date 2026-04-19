@@ -64,7 +64,7 @@ class MetricDetailViewModel @Inject constructor(
         when (intent) {
             MetricDetailIntent.Load -> rewire()
             is MetricDetailIntent.ChangeTimeframe -> {
-                _state.update { it.copy(timeframe = intent.tf, selectedBarIndex = null) }
+                _state.update { it.copy(timeframe = intent.tf) }
                 rewire()
             }
             is MetricDetailIntent.MovePeriod -> {
@@ -80,7 +80,7 @@ class MetricDetailViewModel @Inject constructor(
                 val raw = if (intent.forward) _state.value.periodAnchor.plus(step)
                 else _state.value.periodAnchor.minus(step)
                 val newAnchor = if (raw > today) today else raw
-                _state.update { it.copy(periodAnchor = newAnchor, selectedBarIndex = null) }
+                _state.update { it.copy(periodAnchor = newAnchor) }
                 rewire()
             }
             is MetricDetailIntent.DrillIntoMonth -> {
@@ -91,10 +91,6 @@ class MetricDetailViewModel @Inject constructor(
                     )
                 }
                 rewire()
-            }
-            is MetricDetailIntent.SelectBar -> {
-                val current = _state.value.selectedBarIndex
-                _state.update { it.copy(selectedBarIndex = if (current == intent.index) null else intent.index) }
             }
             MetricDetailIntent.Back -> _effects.trySend(MetricDetailEffect.NavigateBack)
         }

@@ -21,6 +21,10 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.minus
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,27 +53,54 @@ class SummaryComputeEngine @Inject constructor(
     private val prefsRepo: PreferencesRepository,
     private val clock: Clock,
 ) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
-     * Drain the compute queue and recompute affected summaries.
+     * Launch a full queue drain on an application-scoped coroutine
+     * so it survives ViewModel destruction.
+     */
+    fun launchProcessQueueAll() {
+        scope.launch { processQueueAll() }
+    }
+
+    /**
+     * Drain the entire compute queue, processing in batches until empty.
+     */
+    suspend fun processQueueAll(batchSize: Int = 500) {
+        var totalProcessed = 0
+        while (true) {
+            val entries = computeQueueDao.dequeue(batchSize)
+            if (entries.isEmpty()) break
+            processEntries(entries)
+            totalProcessed += entries.size
+        }
+        if (totalProcessed > 0) {
+            Log.d(TAG, "processQueueAll: processed $totalProcessed entries total")
+        }
+    }
+
+    /**
+     * Drain the compute queue and recompute affected summaries (single batch).
      */
     suspend fun processQueue(batchSize: Int = 500) {
         val entries = computeQueueDao.dequeue(batchSize)
         if (entries.isEmpty()) return
+        processEntries(entries)
+    }
+
+    private suspend fun processEntries(entries: List<ComputeQueueEntity>) {
         Log.d(TAG, "Processing ${entries.size} compute queue entries")
 
         val goals = buildGoalMap()
         val prefs = prefsRepo.getMetricDisplay()
         val nowMs = clock.now().toEpochMilliseconds()
 
-        // Group by date for efficient batch processing
         val byDate = entries.groupBy { it.date }
         for ((date, dateEntries) in byDate) {
             val metrics = dateEntries.map { it.metric }.toSet()
             computeForDate(date, metrics, goals, prefs.activityOnlyDistance, prefs.activityOnlyCalories, nowMs)
         }
 
-        // Clear processed entries
         for (entry in entries) {
             computeQueueDao.remove(entry.date, entry.metric)
         }
@@ -117,24 +148,30 @@ class SummaryComputeEngine @Inject constructor(
                     }
                 }
                 MetricType.ActiveCalories -> {
+                    var total = 0.0
+                    var source = "raw"
                     if (activityOnlyCalories) {
                         val exerciseCals = computeExerciseCaloriesForDate(date)
-                        summaries += SummaryDailyMetricEntity(
-                            date = date, metric = MetricType.ActiveCalories.name,
-                            total = exerciseCals, goal = goals[MetricType.ActiveCalories],
-                            sampleCount = 1, computedAtMs = nowMs,
-                            sourceUsed = "exercise_sessions",
-                        )
-                    } else {
+                        if (exerciseCals > 0) {
+                            total = exerciseCals
+                            source = "exercise_sessions"
+                        }
+                    }
+                    // Fall back to raw daily metric if no exercise data or not activity-only
+                    if (total <= 0) {
                         val resolved = resolveRawMetric(date, MetricType.ActiveCalories.name)
                         if (resolved != null) {
-                            summaries += SummaryDailyMetricEntity(
-                                date = date, metric = MetricType.ActiveCalories.name,
-                                total = resolved.first, goal = goals[MetricType.ActiveCalories],
-                                sampleCount = 1, computedAtMs = nowMs,
-                                sourceUsed = resolved.second,
-                            )
+                            total = resolved.first
+                            source = resolved.second
                         }
+                    }
+                    if (total > 0) {
+                        summaries += SummaryDailyMetricEntity(
+                            date = date, metric = MetricType.ActiveCalories.name,
+                            total = total, goal = goals[MetricType.ActiveCalories],
+                            sampleCount = 1, computedAtMs = nowMs,
+                            sourceUsed = source,
+                        )
                     }
                 }
                 MetricType.ZoneMinutes -> {
@@ -210,7 +247,6 @@ class SummaryComputeEngine @Inject constructor(
      */
     suspend fun recomputeAll(days: Int = 30) {
         val nowMs = clock.now().toEpochMilliseconds()
-        val zone = TimeZone.currentSystemDefault()
         val today = clock.today()
         val entries = mutableListOf<ComputeQueueEntity>()
 
@@ -234,7 +270,8 @@ class SummaryComputeEngine @Inject constructor(
         if (entries.isNotEmpty()) {
             computeQueueDao.enqueue(entries)
             Log.d(TAG, "Enqueued ${entries.size} entries for recomputation ($days days)")
-            processQueue(entries.size)
+            // Process on app-scoped coroutine so it survives ViewModel cancellation
+            launchProcessQueueAll()
         }
     }
 
@@ -256,7 +293,7 @@ class SummaryComputeEngine @Inject constructor(
 
         if (entries.isNotEmpty()) {
             computeQueueDao.enqueue(entries)
-            processQueue(entries.size)
+            launchProcessQueueAll()
         }
     }
 

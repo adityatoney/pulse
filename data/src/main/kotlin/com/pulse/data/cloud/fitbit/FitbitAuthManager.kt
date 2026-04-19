@@ -227,7 +227,7 @@ class FitbitAuthManager @Inject constructor(
         const val REDIRECT_URI = "pulse://fitbit/callback"
         private const val AUTH_URL = "https://www.fitbit.com/oauth2/authorize"
         private const val TOKEN_URL = "https://api.fitbit.com/oauth2/token"
-        private const val SCOPES = "activity heartrate sleep weight profile"
+        private const val SCOPES = "activity heartrate sleep weight profile settings"
         private const val KEY_ACCESS_TOKEN = "fitbit_access_token"
         private const val KEY_REFRESH_TOKEN = "fitbit_refresh_token"
         private const val KEY_EXPIRES_AT = "fitbit_expires_at"

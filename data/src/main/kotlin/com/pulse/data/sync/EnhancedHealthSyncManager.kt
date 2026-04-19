@@ -179,12 +179,24 @@ class EnhancedHealthSyncManager @Inject constructor(
                 throw TokenExpiredException()
             }
             is HealthConnectDataSource.ChangesResult.Success -> {
-                if (result.upsertedRecordTypes.isEmpty() && result.deletionCount == 0) {
+                if (result.upsertedRecordTypes.isEmpty() && result.deletedIds.isEmpty()) {
                     Log.d(TAG, "No changes detected")
                     saveToken(result.nextToken)
                     return@runCatching
                 }
-                Log.d(TAG, "Changes detected: ${result.upsertedRecordTypes.size} types updated, ${result.deletionCount} deletions")
+                Log.d(TAG, "Changes detected: ${result.upsertedRecordTypes.size} types updated, ${result.deletedIds.size} deletions")
+
+                // Process deletions: remove records from local DB
+                if (result.deletedIds.isNotEmpty()) {
+                    // HC doesn't tell us which table the deleted ID belongs to,
+                    // so try all session tables. IDs are globally unique.
+                    for (chunk in result.deletedIds.chunked(500)) {
+                        hrSampleDao.deleteForSessions(chunk)
+                        exerciseDao.deleteByIds(chunk)
+                        sleepDao.deleteByIds(chunk)
+                    }
+                    Log.d(TAG, "Processed ${result.deletedIds.size} deletions from local DB")
+                }
 
                 val zone = ZoneId.systemDefault()
                 val today = JavaLocalDate.now(zone)
@@ -196,7 +208,7 @@ class EnhancedHealthSyncManager @Inject constructor(
                     fetchBulkSleep(start, today, zone)
                     fetchExerciseWithDetails(start, today, zone)
                 }
-                computeEngine.processQueue()
+                computeEngine.processQueueAll()
 
                 val incrementalDates = generateSequence(start) { it.plusDays(1) }
                     .takeWhile { !it.isAfter(today) }

@@ -43,7 +43,7 @@ fun BatteryChip(
         )
         Spacer(Modifier.width(6.dp))
         Text(
-            text = "$pct%",
+            text = if (pct >= 0) "$pct%" else "--",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
