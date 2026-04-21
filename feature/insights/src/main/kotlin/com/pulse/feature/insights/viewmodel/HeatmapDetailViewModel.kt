@@ -59,6 +59,18 @@ class HeatmapDetailViewModel @Inject constructor(
                 loadData(intent.metric)
             }
             HeatmapDetailIntent.Back -> _effects.trySend(HeatmapDetailEffect.NavigateBack)
+            HeatmapDetailIntent.PrevMonth -> {
+                val months = _state.value.availableMonths
+                val current = _state.value.selectedMonth ?: return
+                val idx = months.indexOf(current)
+                if (idx > 0) _state.update { it.copy(selectedMonth = months[idx - 1]) }
+            }
+            HeatmapDetailIntent.NextMonth -> {
+                val months = _state.value.availableMonths
+                val current = _state.value.selectedMonth ?: return
+                val idx = months.indexOf(current)
+                if (idx < months.lastIndex) _state.update { it.copy(selectedMonth = months[idx + 1]) }
+            }
         }
     }
 
@@ -68,6 +80,7 @@ class HeatmapDetailViewModel @Inject constructor(
         val tz = TimeZone.currentSystemDefault()
         val oneYearAgo = todayDate.minus(DatePeriod(days = 365))
         val label = InsightsViewModel.metricLabel(metric)
+        val currentMonth = todayDate.toString().substring(0, 7)
 
         dataJob = healthRepo.observeSeries(
             metric,
@@ -83,7 +96,15 @@ class HeatmapDetailViewModel @Inject constructor(
                     metricLabel = label,
                 )
             }
-            _state.update { it.copy(heatmapDays = days, loading = false) }
+            val months = days.map { it.date.substring(0, 7) }.distinct().sorted()
+            _state.update {
+                it.copy(
+                    heatmapDays = days,
+                    loading = false,
+                    availableMonths = months,
+                    selectedMonth = it.selectedMonth ?: currentMonth,
+                )
+            }
         }.launchIn(viewModelScope)
     }
 }

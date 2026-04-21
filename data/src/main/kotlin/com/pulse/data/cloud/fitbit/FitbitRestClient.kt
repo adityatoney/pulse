@@ -24,29 +24,33 @@ class FitbitRestClient @Inject constructor(
     private val authManager: FitbitAuthManager,
 ) {
     private var rateLimitRemaining: Int = 150
+    private var rateLimitResetSeconds: Int = 3600
 
     /**
      * Fetch activity logs (exercise sessions) after a given date.
-     * Automatically paginates to fetch all available activities.
+     * Follows the pagination `next` URL until all activities are retrieved.
      */
     suspend fun fetchActivityLogs(
         afterDate: String,
         limit: Int = 100,
     ): List<FitbitActivity> {
         val all = mutableListOf<FitbitActivity>()
-        var offset = 0
-        var hasMore = true
+        var url: String? = "$BASE_URL/1/user/-/activities/list.json" +
+            "?afterDate=$afterDate&sort=asc&limit=$limit&offset=0"
 
-        while (hasMore) {
-            val response = authedGet<FitbitActivityListResponse>(
-                "$BASE_URL/1/user/-/activities/list.json" +
-                    "?afterDate=$afterDate&sort=asc&limit=$limit&offset=$offset"
-            )
-            if (response == null) break
+        while (url != null) {
+            val response = authedGet<FitbitActivityListResponse>(url) ?: break
             all.addAll(response.activities)
-
-            hasMore = response.pagination?.next != null && response.activities.size == limit
-            offset += limit
+            Log.d(TAG, "Activity page: ${response.activities.size} activities (total: ${all.size})")
+            // Stop if we got fewer than requested (last page) or no next URL
+            val nextUrl = response.pagination?.next
+            url = if (response.activities.size < limit || nextUrl == null) {
+                null
+            } else {
+                // Fitbit sometimes returns localhost URLs — rewrite to use the real API base
+                nextUrl.replace("http://localhost", BASE_URL)
+                    .replace("https://localhost", BASE_URL)
+            }
         }
 
         Log.d(TAG, "Fetched ${all.size} activity logs after $afterDate")
@@ -151,6 +155,9 @@ class FitbitRestClient @Inject constructor(
 
     fun getRateLimitRemaining(): Int = rateLimitRemaining
 
+    /** Seconds until the Fitbit rate limit resets (from the last API response). */
+    fun getRateLimitResetSeconds(): Int = rateLimitResetSeconds
+
     private suspend inline fun <reified T> authedGet(url: String): T? {
         val token = authManager.getAccessToken()
             ?: throw IllegalStateException("Not authenticated with Fitbit")
@@ -169,6 +176,9 @@ class FitbitRestClient @Inject constructor(
         // Track rate limit from response headers
         response.headers["Fitbit-Rate-Limit-Remaining"]?.toIntOrNull()?.let {
             rateLimitRemaining = it
+        }
+        response.headers["Fitbit-Rate-Limit-Reset"]?.toIntOrNull()?.let {
+            rateLimitResetSeconds = it
         }
 
         return when (response.status) {

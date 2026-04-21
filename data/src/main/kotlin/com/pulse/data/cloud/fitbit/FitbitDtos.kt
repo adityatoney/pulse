@@ -16,8 +16,8 @@ data class FitbitActivity(
     val logId: Long,
     val activityName: String,
     val activityTypeId: Int? = null,
-    val startTime: String,   // HH:mm:ss
-    val startDate: String,   // yyyy-MM-dd
+    val startTime: String,   // ISO datetime e.g. "2021-04-20T08:59:34.000-07:00"
+    val startDate: String? = null,   // Not present in Activity List API response
     val duration: Long,      // ms
     val distance: Double? = null,
     val distanceUnit: String? = null, // "Mile" or "Kilometer"
@@ -32,6 +32,7 @@ data class FitbitActivity(
     val elevationGain: Double? = null,
     val pace: Double? = null,       // minutes per unit distance
     val speed: Double? = null,      // km/h or mph
+    val logType: String? = null,    // "tracker", "manual", "auto_detected"
 )
 
 @Serializable

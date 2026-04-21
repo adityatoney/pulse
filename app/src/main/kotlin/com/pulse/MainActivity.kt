@@ -233,6 +233,7 @@ fun FitbitNavHost(hcDataSource: HealthConnectDataSource) {
             onNavigateToExerciseLog = { nav.navigate(ExerciseLog) },
             onNavigateToExerciseDetail = { sessionId -> nav.navigate(ExerciseDetail(sessionId)) },
             onNavigateToInsights = { nav.navigate(Insights) },
+            onNavigateToHeatmap = { nav.navigate(HeatmapDetail()) },
             onNavigateToChat = {
                 Toast.makeText(context, "Coach coming soon", Toast.LENGTH_SHORT).show()
             },

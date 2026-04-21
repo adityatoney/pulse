@@ -106,6 +106,27 @@ class SyncScheduler @Inject constructor(
         )
     }
 
+    /**
+     * Schedule a delayed Fitbit sync to continue after rate limit resets.
+     * Uses REPLACE so the new delay overwrites any pending retry.
+     */
+    fun scheduleFitbitSyncDelayed(delayMinutes: Long) {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        val request = OneTimeWorkRequestBuilder<FitbitSyncWorker>()
+            .setConstraints(constraints)
+            .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
+            .addTag(FitbitSyncWorker.TAG)
+            .build()
+        workManager.enqueueUniqueWork(
+            FitbitSyncWorker.UNIQUE_NAME,
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
+    }
+
     /** Cancel the legacy HealthConnectSyncWorker from before the refactor. */
     fun cancelLegacyWorker() {
         workManager.cancelUniqueWork(HealthConnectSyncWorker.UNIQUE_NAME)

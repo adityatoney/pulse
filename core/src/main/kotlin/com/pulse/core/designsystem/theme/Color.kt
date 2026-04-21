@@ -20,10 +20,11 @@ val Ink500 = Color(0xFF6A7770)
 // Ring accents
 val Coral500 = Color(0xFFE15D4A)      // Calories
 val CoralLight = Color(0xFFF2A08E)
-val Mustard500 = Color(0xFFE0A84A)    // Zone minutes
-val MustardLight = Color(0xFFF2CA84)
+val Amber500 = Color(0xFFFFA726)       // Zone minutes
+val AmberLight = Color(0xFFFFCC80)
 val Sky500 = Color(0xFF4A90E2)        // Distance
 val SkyLight = Color(0xFF88B9EE)
+
 
 val ErrorRed = Color(0xFFB3261E)
 val WarnAmber = Color(0xFFE0A800)

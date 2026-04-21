@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -75,6 +76,7 @@ import com.pulse.core.ui.chrome.BatteryChip
 import com.pulse.core.ui.chrome.DateScrollerRow
 import com.pulse.core.ui.ring.ActivityRingHero
 import com.pulse.core.ui.ring.SecondaryRingTile
+import com.pulse.core.ui.ring.ToggleableRingTile
 import com.pulse.core.ui.sync.SyncChipState
 import com.pulse.core.ui.sync.SyncStatusChip
 import com.pulse.core.ui.util.formatted
@@ -85,6 +87,7 @@ import com.pulse.domain.model.ExerciseSession
 import com.pulse.domain.model.InsightSentiment
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.SyncPhase
+import com.pulse.domain.model.Timeframe
 import com.pulse.domain.model.TrendDirection
 import com.pulse.feature.dashboard.state.DashboardEffect
 import com.pulse.feature.dashboard.state.DashboardIntent
@@ -103,6 +106,7 @@ fun DashboardRoute(
     onNavigateToExerciseLog: () -> Unit,
     onNavigateToExerciseDetail: (String) -> Unit = {},
     onNavigateToInsights: () -> Unit = {},
+    onNavigateToHeatmap: () -> Unit = {},
     onNavigateToChat: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToDebug: () -> Unit,
@@ -121,6 +125,7 @@ fun DashboardRoute(
                     DashboardEffect.NavigateToExerciseLog -> onNavigateToExerciseLog()
                     is DashboardEffect.NavigateToExerciseDetail -> onNavigateToExerciseDetail(effect.sessionId)
                     DashboardEffect.NavigateToInsights -> onNavigateToInsights()
+                    DashboardEffect.NavigateToHeatmap -> onNavigateToHeatmap()
                     DashboardEffect.NavigateToChat -> onNavigateToChat()
                     DashboardEffect.NavigateToProfile -> onNavigateToProfile()
                     DashboardEffect.NavigateToDebugMenu -> onNavigateToDebug()
@@ -232,9 +237,9 @@ fun DashboardScreen(
                 )
                 NavigationBarItem(
                     selected = false,
-                    onClick = { onIntent(DashboardIntent.OpenProfile) },
-                    icon = { Icon(Icons.Outlined.Person, contentDescription = null) },
-                    label = { Text("You") },
+                    onClick = { onIntent(DashboardIntent.OpenHeatmap) },
+                    icon = { Icon(Icons.Outlined.CalendarMonth, contentDescription = null) },
+                    label = { Text("Activity") },
                 )
             }
         },
@@ -304,24 +309,28 @@ fun DashboardScreen(
                     )
 
                     val dist = state.metrics?.distanceMiles
-                    SecondaryRingTile(
+                    ToggleableRingTile(
                         progress = dist?.progress ?: 0f,
                         brush = rings.distance,
                         trackColor = rings.track,
                         icon = Icons.Outlined.Place,
                         value = (dist?.current ?: 0.0).formattedMiles(),
                         label = "mi",
+                        isActivityOnly = state.activityOnlyDistance,
+                        onToggle = { onIntent(DashboardIntent.ToggleDistanceMode) },
                         onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.Distance)) },
                     )
 
                     val cal = state.metrics?.calories
-                    SecondaryRingTile(
+                    ToggleableRingTile(
                         progress = cal?.progress ?: 0f,
                         brush = rings.calories,
                         trackColor = rings.track,
                         icon = Icons.Outlined.LocalFireDepartment,
                         value = (cal?.current ?: 0).formatted(),
                         label = "cal",
+                        isActivityOnly = state.activityOnlyCalories,
+                        onToggle = { onIntent(DashboardIntent.ToggleCaloriesMode) },
                         onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.ActiveCalories)) },
                     )
                 }

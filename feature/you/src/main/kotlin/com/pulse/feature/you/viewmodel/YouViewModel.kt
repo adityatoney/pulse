@@ -1,5 +1,6 @@
 package com.pulse.feature.you.viewmodel
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pulse.data.cloud.DriveAuthManager
@@ -147,10 +148,23 @@ class YouViewModel @Inject constructor(
                     _state.update { it.copy(syncing = true, syncMessage = null) }
                     try {
                         debugRepo.forceSyncNow()
+                        var fitbitRateLimited = false
                         if (_state.value.fitbitConnected) {
-                            fitbitSyncManager.sync()
+                            _state.update { it.copy(syncMessage = "Syncing Fitbit history...") }
+                            val result = fitbitSyncManager.sync()
+                            if (result.isFailure) {
+                                Log.w("YouVM", "Fitbit sync error", result.exceptionOrNull())
+                            }
+                            fitbitRateLimited = result.getOrNull() == FitbitSyncManager.SyncStatus.RateLimited
                         }
-                        _state.update { it.copy(syncing = false, syncMessage = "Sync complete") }
+                        _state.update { it.copy(syncMessage = "Recomputing summaries...") }
+                        computeEngine.recomputeAll(days = 1900)
+                        val msg = if (fitbitRateLimited) {
+                            "Sync paused — Fitbit rate limit reached. Will resume automatically."
+                        } else {
+                            "Sync complete"
+                        }
+                        _state.update { it.copy(syncing = false, syncMessage = msg) }
                     } catch (e: Exception) {
                         _state.update { it.copy(syncing = false, syncMessage = "Sync failed: ${e.message}") }
                     }
@@ -219,13 +233,11 @@ class YouViewModel @Inject constructor(
             is YouIntent.SetActivityOnlyDistance -> {
                 viewModelScope.launch {
                     prefsRepo.setActivityOnlyDistance(intent.enabled)
-                    computeEngine.recomputeAll()
                 }
             }
             is YouIntent.SetActivityOnlyCalories -> {
                 viewModelScope.launch {
                     prefsRepo.setActivityOnlyCalories(intent.enabled)
-                    computeEngine.recomputeAll()
                 }
             }
 
@@ -347,7 +359,10 @@ class YouViewModel @Inject constructor(
     }
 
     private fun loadGoogleHealthStatus() {
-        _state.update { it.copy(googleHealthSignedIn = googleHealthAuthManager.isAuthenticated) }
+        viewModelScope.launch {
+            val connected = googleHealthAuthManager.isConnected()
+            _state.update { it.copy(googleHealthSignedIn = connected) }
+        }
     }
 
     fun onFitbitConnected() {

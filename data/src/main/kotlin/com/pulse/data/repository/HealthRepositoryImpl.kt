@@ -2,6 +2,8 @@ package com.pulse.data.repository
 
 import android.util.Log
 import com.pulse.data.compute.SummaryComputeEngine
+import com.pulse.data.datastore.MetricDisplayPrefs
+import com.pulse.data.datastore.PreferencesRepository
 import com.pulse.data.health.HealthConnectDataSource
 import com.pulse.data.sync.EnhancedHealthSyncManager
 import com.pulse.data.local.dao.ComputeQueueDao
@@ -68,15 +70,25 @@ class HealthRepositoryImpl @Inject constructor(
     private val routePointDao: com.pulse.data.local.dao.ExerciseRoutePointDao,
     private val sleepDao: com.pulse.data.local.dao.SleepSessionDao,
     private val goalDao: GoalDao,
+    private val prefsRepo: PreferencesRepository,
     private val clock: Clock,
 ) : HealthRepository {
+
+    /** Pick the effective total based on current pref for distance/calories metrics. */
+    private fun SummaryDailyMetricEntity.effectiveTotal(
+        metric: MetricType,
+        prefs: MetricDisplayPrefs,
+    ): Double = when {
+        metric == MetricType.Distance && prefs.activityOnlyDistance -> activityTotal ?: 0.0
+        metric == MetricType.ActiveCalories && prefs.activityOnlyCalories -> activityTotal ?: 0.0
+        else -> total
+    }
 
     override fun observeTodaySummary(date: LocalDate): Flow<TodaySummary> {
         val key = date.toString()
         val goalsFlow = goalDao.observeAll().map { rows ->
             rows.associate { it.metric to it.target }
         }
-        // Simplified: summary table already has the right values based on user prefs
         val dataFlow = combine(
             summaryDao.observe(key, MetricType.Steps.name),
             summaryDao.observe(key, MetricType.Distance.name),
@@ -86,18 +98,21 @@ class HealthRepositoryImpl @Inject constructor(
         ) { steps, dist, cals, zmin, sleep ->
             DataTuple(steps = steps, dist = dist, cals = cals, zmin = zmin, sleep = sleep)
         }
-        return combine(goalsFlow, dataFlow) { goals, data ->
+        return combine(goalsFlow, dataFlow, prefsRepo.observeMetricDisplay()) { goals, data, prefs ->
             val stepGoal = goals[MetricType.Steps.name] ?: DEFAULT_STEP_GOAL
             val distGoal = goals[MetricType.Distance.name] ?: DEFAULT_DISTANCE_GOAL_MI
             val calGoal = goals[MetricType.ActiveCalories.name] ?: DEFAULT_CALORIE_GOAL
             val zmGoal = goals[MetricType.ZoneMinutes.name] ?: DEFAULT_ZONE_MIN_GOAL
 
+            val distTotal = data.dist?.effectiveTotal(MetricType.Distance, prefs) ?: 0.0
+            val calTotal = data.cals?.effectiveTotal(MetricType.ActiveCalories, prefs) ?: 0.0
+
             TodaySummary(
                 today = TodayMetrics(
-                    steps = buildInt(data.steps, stepGoal, "steps"),
-                    distanceMiles = buildMiles(data.dist, distGoal),
-                    calories = buildInt(data.cals, calGoal, "cal"),
-                    zoneMinutes = buildInt(data.zmin, zmGoal, "Zone Min"),
+                    steps = buildInt(data.steps?.total ?: 0.0, stepGoal, "steps"),
+                    distanceMiles = buildMiles(distTotal, distGoal),
+                    calories = buildInt(calTotal, calGoal, "cal"),
+                    zoneMinutes = buildInt(data.zmin?.total ?: 0.0, zmGoal, "Zone Min"),
                 ),
                 recovery = RecoveryBlock(sleep = data.sleep),
             )
@@ -113,15 +128,30 @@ class HealthRepositoryImpl @Inject constructor(
     )
 
     override fun observeDailyAggregate(date: LocalDate, metric: MetricType): Flow<DailyAggregate> =
-        summaryDao.observe(date.toString(), metric.name).map { entity ->
-            entity?.toDomain() ?: DailyAggregate(
-                date = date,
-                metric = metric,
-                total = 0.0,
-                goal = defaultGoal(metric),
-                sampleCount = 0,
-                computedAt = clock.now(),
-            )
+        combine(
+            summaryDao.observe(date.toString(), metric.name),
+            prefsRepo.observeMetricDisplay(),
+        ) { entity, prefs ->
+            if (entity != null) {
+                val effective = entity.effectiveTotal(metric, prefs)
+                DailyAggregate(
+                    date = date,
+                    metric = metric,
+                    total = effective,
+                    goal = entity.goal,
+                    sampleCount = entity.sampleCount,
+                    computedAt = Instant.fromEpochMilliseconds(entity.computedAtMs),
+                )
+            } else {
+                DailyAggregate(
+                    date = date,
+                    metric = metric,
+                    total = 0.0,
+                    goal = defaultGoal(metric),
+                    sampleCount = 0,
+                    computedAt = clock.now(),
+                )
+            }
         }
 
     override fun observeSeries(
@@ -129,7 +159,6 @@ class HealthRepositoryImpl @Inject constructor(
         range: DateRange,
         bucket: Bucket,
     ): Flow<MetricSeries> {
-        // No more pref-based branching — summary table has the right value
         return when (bucket) {
             Bucket.Hour -> observeHourlySeries(metric, range)
             Bucket.Day -> observeDailySeriesFromSummary(metric, range)
@@ -142,87 +171,92 @@ class HealthRepositoryImpl @Inject constructor(
         metric: MetricType,
         range: DateRange,
     ): Flow<MetricSeries> {
-        val zone = TimeZone.currentSystemDefault()
-        return summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
-            .map { rows ->
-                val rowMap = rows.associateBy { it.date }
-                var d = range.start
-                val points = mutableListOf<SeriesPoint>()
-                while (d <= range.endInclusive) {
-                    val row = rowMap[d.toString()]
-                    points += SeriesPoint(
-                        bucketStart = Instant.fromEpochMilliseconds(d.atStartOfDayMillis()),
-                        value = row?.total ?: 0.0,
-                        goal = row?.goal ?: defaultGoal(metric),
-                    )
-                    d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
-                }
-                MetricSeries(
-                    metric = metric,
-                    range = range,
-                    aggregation = Aggregation.Sum,
-                    points = points,
+        return combine(
+            summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString()),
+            prefsRepo.observeMetricDisplay(),
+        ) { rows, prefs ->
+            val rowMap = rows.associateBy { it.date }
+            var d = range.start
+            val points = mutableListOf<SeriesPoint>()
+            while (d <= range.endInclusive) {
+                val row = rowMap[d.toString()]
+                points += SeriesPoint(
+                    bucketStart = Instant.fromEpochMilliseconds(d.atStartOfDayMillis()),
+                    value = row?.effectiveTotal(metric, prefs) ?: 0.0,
+                    goal = row?.goal ?: defaultGoal(metric),
                 )
+                d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
             }
+            MetricSeries(
+                metric = metric,
+                range = range,
+                aggregation = Aggregation.Sum,
+                points = points,
+            )
+        }
     }
 
     private fun observeWeeklySeriesFromSummary(
         metric: MetricType,
         range: DateRange,
     ): Flow<MetricSeries> {
-        return summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
-            .map { rows ->
-                val rowMap = rows.associateBy { it.date }
-                val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
-                var d = range.start
-                while (d <= range.endInclusive) {
-                    dailyEntries += d to rowMap[d.toString()]
-                    d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
-                }
-                val grouped = dailyEntries.groupBy { (date, _) ->
-                    val dow = date.dayOfWeek.ordinal
-                    date.minus(kotlinx.datetime.DatePeriod(days = dow))
-                }
-                val points = grouped.toSortedMap().map { (monday, entries) ->
-                    val sum = entries.sumOf { (_, row) -> row?.total ?: 0.0 }
-                    val goal = entries.firstNotNullOfOrNull { (_, row) -> row?.goal } ?: defaultGoal(metric)
-                    SeriesPoint(
-                        bucketStart = Instant.fromEpochMilliseconds(monday.atStartOfDayMillis()),
-                        value = sum,
-                        goal = goal,
-                    )
-                }
-                MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
+        return combine(
+            summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString()),
+            prefsRepo.observeMetricDisplay(),
+        ) { rows, prefs ->
+            val rowMap = rows.associateBy { it.date }
+            val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
+            var d = range.start
+            while (d <= range.endInclusive) {
+                dailyEntries += d to rowMap[d.toString()]
+                d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
             }
+            val grouped = dailyEntries.groupBy { (date, _) ->
+                val dow = date.dayOfWeek.ordinal
+                date.minus(kotlinx.datetime.DatePeriod(days = dow))
+            }
+            val points = grouped.toSortedMap().map { (monday, entries) ->
+                val sum = entries.sumOf { (_, row) -> row?.effectiveTotal(metric, prefs) ?: 0.0 }
+                val goal = entries.firstNotNullOfOrNull { (_, row) -> row?.goal } ?: defaultGoal(metric)
+                SeriesPoint(
+                    bucketStart = Instant.fromEpochMilliseconds(monday.atStartOfDayMillis()),
+                    value = sum,
+                    goal = goal,
+                )
+            }
+            MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
+        }
     }
 
     private fun observeMonthlySeriesFromSummary(
         metric: MetricType,
         range: DateRange,
     ): Flow<MetricSeries> {
-        return summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString())
-            .map { rows ->
-                val rowMap = rows.associateBy { it.date }
-                val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
-                var d = range.start
-                while (d <= range.endInclusive) {
-                    dailyEntries += d to rowMap[d.toString()]
-                    d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
-                }
-                val grouped = dailyEntries.groupBy { (date, _) ->
-                    LocalDate(date.year, date.monthNumber, 1)
-                }
-                val points = grouped.toSortedMap().map { (firstOfMonth, entries) ->
-                    val sum = entries.sumOf { (_, row) -> row?.total ?: 0.0 }
-                    val goal = entries.firstNotNullOfOrNull { (_, row) -> row?.goal } ?: defaultGoal(metric)
-                    SeriesPoint(
-                        bucketStart = Instant.fromEpochMilliseconds(firstOfMonth.atStartOfDayMillis()),
-                        value = sum,
-                        goal = goal,
-                    )
-                }
-                MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
+        return combine(
+            summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString()),
+            prefsRepo.observeMetricDisplay(),
+        ) { rows, prefs ->
+            val rowMap = rows.associateBy { it.date }
+            val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
+            var d = range.start
+            while (d <= range.endInclusive) {
+                dailyEntries += d to rowMap[d.toString()]
+                d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
             }
+            val grouped = dailyEntries.groupBy { (date, _) ->
+                LocalDate(date.year, date.monthNumber, 1)
+            }
+            val points = grouped.toSortedMap().map { (firstOfMonth, entries) ->
+                val sum = entries.sumOf { (_, row) -> row?.effectiveTotal(metric, prefs) ?: 0.0 }
+                val goal = entries.firstNotNullOfOrNull { (_, row) -> row?.goal } ?: defaultGoal(metric)
+                SeriesPoint(
+                    bucketStart = Instant.fromEpochMilliseconds(firstOfMonth.atStartOfDayMillis()),
+                    value = sum,
+                    goal = goal,
+                )
+            }
+            MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
+        }
     }
 
     private fun observeHourlySeries(
@@ -504,11 +538,10 @@ class HealthRepositoryImpl @Inject constructor(
     }
 
     private fun buildInt(
-        entity: SummaryDailyMetricEntity?,
+        total: Double,
         defaultGoal: Double,
         unitLabel: String,
     ): MetricValue<Int> {
-        val total = entity?.total ?: 0.0
         val progress = if (defaultGoal > 0) (total / defaultGoal).toFloat().coerceIn(0f, 1.25f) else 0f
         return MetricValue(
             current = total.roundToInt(),
@@ -519,10 +552,9 @@ class HealthRepositoryImpl @Inject constructor(
     }
 
     private fun buildMiles(
-        entity: SummaryDailyMetricEntity?,
+        total: Double,
         defaultGoal: Double,
     ): MetricValue<Double> {
-        val total = entity?.total ?: 0.0
         val progress = if (defaultGoal > 0) (total / defaultGoal).toFloat().coerceIn(0f, 1.25f) else 0f
         return MetricValue(
             current = total,

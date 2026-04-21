@@ -34,6 +34,8 @@ data class DashboardState(
     val weight: Double? = null,
     val spo2: Double? = null,
     val hrv: Double? = null,
+    val activityOnlyDistance: Boolean = false,
+    val activityOnlyCalories: Boolean = false,
 )
 
 sealed interface DashboardError {
@@ -58,7 +60,10 @@ sealed interface DashboardIntent {
     data object OpenInsights : DashboardIntent
     data object OpenChat : DashboardIntent
     data object OpenProfile : DashboardIntent
+    data object OpenHeatmap : DashboardIntent
     data object OpenDebugMenu : DashboardIntent
+    data object ToggleDistanceMode : DashboardIntent
+    data object ToggleCaloriesMode : DashboardIntent
 }
 
 sealed interface DashboardEffect {
@@ -68,6 +73,7 @@ sealed interface DashboardEffect {
     data object NavigateToInsights : DashboardEffect
     data object NavigateToChat : DashboardEffect
     data object NavigateToProfile : DashboardEffect
+    data object NavigateToHeatmap : DashboardEffect
     data object NavigateToDebugMenu : DashboardEffect
     data class ShowSnackbar(val message: String) : DashboardEffect
     data object RequestHealthConnectPermissions : DashboardEffect

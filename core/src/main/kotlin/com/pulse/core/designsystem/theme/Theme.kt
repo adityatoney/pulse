@@ -100,7 +100,7 @@ fun FitbitTheme(
         steps = Brush.sweepGradient(listOf(Forest300, Forest900, Forest300)),
         distance = Brush.sweepGradient(listOf(SkyLight, Sky500, SkyLight)),
         calories = Brush.sweepGradient(listOf(CoralLight, Coral500, CoralLight)),
-        zone = Brush.sweepGradient(listOf(MustardLight, Mustard500, MustardLight)),
+        zone = Brush.sweepGradient(listOf(AmberLight, Amber500, AmberLight)),
         track = scheme.surfaceVariant,
     )
 

@@ -94,7 +94,7 @@ import com.pulse.core.designsystem.theme.Coral500
 import com.pulse.core.designsystem.theme.Forest300
 import com.pulse.core.designsystem.theme.Forest500
 import com.pulse.core.designsystem.theme.Forest900
-import com.pulse.core.designsystem.theme.Mustard500
+import com.pulse.core.designsystem.theme.Amber500
 import com.pulse.core.designsystem.theme.Sage100
 import com.pulse.core.designsystem.theme.Sage300
 import com.pulse.core.designsystem.theme.Sky500
@@ -355,7 +355,7 @@ private fun TodaySnapshot(state: YouState) {
                     value = state.weekZoneMin,
                     goal = zmGoal,
                     label = "Zone min",
-                    color = Mustard500,
+                    color = Amber500,
                     format = { "$it" },
                 )
             }
@@ -501,7 +501,7 @@ private fun colorFor(metric: MetricType): Color = when (metric) {
     MetricType.Steps -> Forest500
     MetricType.Distance -> Sky500
     MetricType.ActiveCalories, MetricType.Calories -> Coral500
-    MetricType.ZoneMinutes -> Mustard500
+    MetricType.ZoneMinutes -> Amber500
     else -> Forest500
 }
 

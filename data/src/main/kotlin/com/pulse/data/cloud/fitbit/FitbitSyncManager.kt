@@ -28,6 +28,7 @@ private const val TAG = "FitbitSync"
 private const val METERS_PER_MILE = 1_609.34
 private const val KG_TO_LBS = 2.20462
 private const val FITBIT_CURSOR_KEY = "fitbit_sync_cursor"
+private const val FITBIT_EXERCISE_CURSOR_KEY = "fitbit_exercise_cursor"
 private const val MIN_RATE_LIMIT = 10
 
 @Singleton
@@ -42,6 +43,8 @@ class FitbitSyncManager @Inject constructor(
     private val syncStateDao: SyncStateDao,
     private val clock: Clock,
 ) {
+    enum class SyncStatus { Complete, RateLimited }
+
     private val _progress = MutableStateFlow("")
     val progress: StateFlow<String> = _progress.asStateFlow()
 
@@ -50,15 +53,16 @@ class FitbitSyncManager @Inject constructor(
         Log.d(TAG, msg)
     }
 
-    suspend fun sync(maxHistoryYears: Int = 5): Result<Unit> = runCatching {
+    suspend fun sync(maxHistoryYears: Int = 5): Result<SyncStatus> = runCatching {
         if (!fitbitAuth.tryRestoreTokens()) {
             Log.d(TAG, "Not authenticated with Fitbit, skipping sync")
-            return@runCatching
+            return@runCatching SyncStatus.Complete
         }
 
         val today = LocalDate.now()
         val cursor = loadCursor()
         val startDate = cursor ?: today.minusYears(maxHistoryYears.toLong())
+        val exerciseCursor = loadExerciseCursor()
 
         emitProgress("Starting sync: $startDate → $today")
 
@@ -66,7 +70,9 @@ class FitbitSyncManager @Inject constructor(
         syncDailyAggregates(startDate, today)
 
         emitProgress("Phase 2/4: Exercise logs...")
-        syncExerciseLogs(startDate)
+        val exerciseStart = exerciseCursor ?: today.minusYears(maxHistoryYears.toLong())
+        val exerciseEnd = syncExerciseLogs(exerciseStart)
+        if (exerciseEnd != null) saveExerciseCursor(exerciseEnd)
 
         emitProgress("Phase 3/4: Sleep logs...")
         syncSleepLogs(startDate, today)
@@ -77,8 +83,20 @@ class FitbitSyncManager @Inject constructor(
         // Trigger summary computation from raw data — drain fully
         computeEngine.processQueueAll()
 
-        saveCursor(today)
-        emitProgress("Sync complete: $startDate → $today")
+        // Remove duplicate exercise sessions from overlapping sources
+        exerciseDao.deduplicateOverlapping()
+
+        // Only save cursor up to where we actually synced successfully.
+        // If rate-limited, cursor stays behind so the next sync resumes.
+        val rateLimited = !checkRateLimit()
+        if (!rateLimited) {
+            saveCursor(today)
+            emitProgress("Sync complete: $startDate → $today")
+        } else {
+            Log.w(TAG, "Rate-limited during sync — cursor NOT advanced, will retry")
+            emitProgress("Sync paused (rate limit) — will resume automatically")
+        }
+        if (rateLimited) SyncStatus.RateLimited else SyncStatus.Complete
     }
 
     suspend fun syncRecent(days: Int = 7): Result<Unit> = runCatching {
@@ -94,6 +112,7 @@ class FitbitSyncManager @Inject constructor(
         syncVitals(startDate, today)
         computeEngine.processQueue()
         saveCursor(today)
+        saveExerciseCursor(today)
     }
 
     // ---- Daily aggregates (steps, distance, calories, zone minutes) ----
@@ -182,51 +201,69 @@ class FitbitSyncManager @Inject constructor(
 
     // ---- Exercise sessions (activity logs) ----
 
-    private suspend fun syncExerciseLogs(afterDate: LocalDate) {
-        if (!checkRateLimit()) return
+    /**
+     * Fetches exercise logs after [afterDate] and returns the date of the last
+     * activity fetched (for cursor tracking), or null if nothing was fetched.
+     */
+    private suspend fun syncExerciseLogs(afterDate: LocalDate): LocalDate? {
+        if (!checkRateLimit()) return null
 
+        Log.d(TAG, "syncExerciseLogs: fetching after $afterDate")
         val activities = fitbitClient.fetchActivityLogs(
             afterDate = afterDate.toString(),
             limit = 100,
         )
 
+        Log.d(TAG, "syncExerciseLogs: got ${activities.size} activities")
         if (activities.isEmpty()) {
             emitProgress("Phase 2/4: No exercise logs after $afterDate")
-            return
+            return null
         }
 
         val zone = ZoneId.systemDefault()
+        var parseFailures = 0
         val entities = activities.mapNotNull { activity ->
-            activityToEntity(activity, zone)
+            activityToEntity(activity, zone).also { if (it == null) parseFailures++ }
         }
 
-        emitProgress("Phase 2/4: ${entities.size} exercise sessions")
-        if (entities.isNotEmpty()) exerciseDao.upsert(entities)
+        // Deduplicate: skip Fitbit exercises that overlap with existing
+        // HealthConnect sessions (same physical activity, different source).
+        val deduped = entities.filter { fitbitSession ->
+            val overlap = exerciseDao.findOverlapping(
+                fitbitSession.startUtcMs - 60_000,  // 1 min tolerance
+                fitbitSession.endUtcMs + 60_000,
+            )
+            val dominated = overlap.any { existing ->
+                existing.id != fitbitSession.id && !existing.id.startsWith("fitbit-")
+            }
+            if (dominated) {
+                Log.d(TAG, "Skipping duplicate: ${fitbitSession.type} at ${fitbitSession.startUtcMs} (HC exists)")
+            }
+            !dominated
+        }
+
+        Log.d(TAG, "syncExerciseLogs: ${entities.size} parsed, $parseFailures failed, ${entities.size - deduped.size} deduped")
+        emitProgress("Phase 2/4: ${deduped.size} exercise sessions (${entities.size - deduped.size} duplicates skipped)")
+        if (deduped.isNotEmpty()) exerciseDao.upsert(deduped)
+
+        // Return the date of the last activity so cursor can advance
+        return entities.maxByOrNull { it.startUtcMs }?.let {
+            java.time.Instant.ofEpochMilli(it.startUtcMs)
+                .atZone(zone).toLocalDate()
+        }
     }
 
     private fun activityToEntity(
         activity: FitbitActivity,
         zone: ZoneId,
     ): ExerciseSessionEntity? {
-        val startDateTime = try {
-            LocalDateTime.parse(
-                "${activity.startDate}T${activity.startTime}",
-                DateTimeFormatter.ISO_LOCAL_DATE_TIME,
-            )
-        } catch (e: Exception) {
-            try {
-                val parts = activity.startTime.split(":")
-                val hour = parts[0].toInt()
-                val min = parts.getOrNull(1)?.toInt() ?: 0
-                val sec = parts.getOrNull(2)?.toInt() ?: 0
-                LocalDate.parse(activity.startDate).atTime(hour, min, sec)
-            } catch (e2: Exception) {
-                Log.w(TAG, "Cannot parse activity time: ${activity.startDate}T${activity.startTime}")
-                return null
-            }
+        // startTime from Activity List API is a full ISO datetime
+        // e.g. "2021-04-20T08:59:34.000-07:00"
+        val startMs = parseIsoDateTime(activity.startTime)
+        if (startMs == 0L) {
+            Log.w(TAG, "Cannot parse activity startTime: ${activity.startTime}")
+            return null
         }
-
-        val startMs = startDateTime.atZone(zone).toInstant().toEpochMilli()
         val endMs = startMs + activity.duration
 
         val distanceMeters = when {
@@ -262,7 +299,7 @@ class FitbitSyncManager @Inject constructor(
             avgPaceSecondsPerMile = avgPace,
             elevationGainMeters = activity.elevationGain,
             zoneMinutes = zoneMinutes,
-            sourceJson = "fitbit",
+            sourceJson = if (activity.logType == "auto_detected") "fitbit:auto" else "fitbit",
             dirty = true,
         )
     }
@@ -379,10 +416,13 @@ class FitbitSyncManager @Inject constructor(
 
     // ---- Helpers ----
 
+    /** Seconds until Fitbit rate limit resets (from last API response). */
+    fun getRateLimitResetSeconds(): Int = fitbitClient.getRateLimitResetSeconds()
+
     private fun checkRateLimit(): Boolean {
         val remaining = fitbitClient.getRateLimitRemaining()
         if (remaining < MIN_RATE_LIMIT) {
-            Log.w(TAG, "Rate limit low ($remaining remaining), pausing sync")
+            Log.w(TAG, "Rate limit low ($remaining remaining), resets in ${fitbitClient.getRateLimitResetSeconds()}s")
             return false
         }
         return true
@@ -393,10 +433,25 @@ class FitbitSyncManager @Inject constructor(
         return runCatching { LocalDate.parse(entity.value) }.getOrNull()
     }
 
+    private suspend fun loadExerciseCursor(): LocalDate? {
+        val entity = syncStateDao.get(FITBIT_EXERCISE_CURSOR_KEY) ?: return null
+        return runCatching { LocalDate.parse(entity.value) }.getOrNull()
+    }
+
     private suspend fun saveCursor(date: LocalDate) {
         syncStateDao.upsert(
             SyncStateEntity(
                 key = FITBIT_CURSOR_KEY,
+                value = date.toString(),
+                updatedAtMs = System.currentTimeMillis(),
+            )
+        )
+    }
+
+    private suspend fun saveExerciseCursor(date: LocalDate) {
+        syncStateDao.upsert(
+            SyncStateEntity(
+                key = FITBIT_EXERCISE_CURSOR_KEY,
                 value = date.toString(),
                 updatedAtMs = System.currentTimeMillis(),
             )

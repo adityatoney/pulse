@@ -3,6 +3,7 @@ package com.pulse.feature.dashboard.viewmodel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.pulse.data.datastore.PreferencesRepository
 import com.pulse.domain.model.DateRange
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.Timeframe
@@ -52,6 +53,7 @@ class DashboardViewModel @Inject constructor(
     private val observeUser: ObserveUserChromeUseCase,
     private val forceSync: ForceSyncUseCase,
     private val health: HealthRepository,
+    private val prefsRepo: PreferencesRepository,
     private val clock: Clock,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
@@ -89,6 +91,15 @@ class DashboardViewModel @Inject constructor(
 
         observeUser().onEach { chrome ->
             _state.update { it.copy(user = chrome) }
+        }.launchIn(viewModelScope)
+
+        prefsRepo.observeMetricDisplay().onEach { prefs ->
+            _state.update {
+                it.copy(
+                    activityOnlyDistance = prefs.activityOnlyDistance,
+                    activityOnlyCalories = prefs.activityOnlyCalories,
+                )
+            }
         }.launchIn(viewModelScope)
 
         wireStreams()
@@ -180,7 +191,22 @@ class DashboardViewModel @Inject constructor(
             DashboardIntent.OpenInsights -> _effects.trySend(DashboardEffect.NavigateToInsights)
             DashboardIntent.OpenChat -> _effects.trySend(DashboardEffect.NavigateToChat)
             DashboardIntent.OpenProfile -> _effects.trySend(DashboardEffect.NavigateToProfile)
+            DashboardIntent.OpenHeatmap -> _effects.trySend(DashboardEffect.NavigateToHeatmap)
             DashboardIntent.OpenDebugMenu -> _effects.trySend(DashboardEffect.NavigateToDebugMenu)
+            DashboardIntent.ToggleDistanceMode -> {
+                val current = _state.value.activityOnlyDistance
+                val newValue = !current
+                prefsRepo.setActivityOnlyDistance(newValue)
+                val label = if (newValue) "Activities only" else "All sources"
+                _effects.trySend(DashboardEffect.ShowSnackbar("Distance: $label"))
+            }
+            DashboardIntent.ToggleCaloriesMode -> {
+                val current = _state.value.activityOnlyCalories
+                val newValue = !current
+                prefsRepo.setActivityOnlyCalories(newValue)
+                val label = if (newValue) "Activities only" else "All sources"
+                _effects.trySend(DashboardEffect.ShowSnackbar("Calories: $label"))
+            }
         }
     }
 

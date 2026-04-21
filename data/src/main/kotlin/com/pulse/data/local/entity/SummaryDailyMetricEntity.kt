@@ -19,4 +19,5 @@ data class SummaryDailyMetricEntity(
     val sourceUsed: String? = null,
     val dirty: Boolean = true,
     val remoteVersion: Long? = null,
+    val activityTotal: Double? = null,
 )

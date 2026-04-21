@@ -47,7 +47,7 @@ import com.pulse.data.local.entity.SyncStateEntity
         RawHourlyMetricEntity::class,
         InsightEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class PulseDatabase : RoomDatabase() {
@@ -67,7 +67,7 @@ abstract class PulseDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "pulse.db"
-        const val VERSION = 7
+        const val VERSION = 8
 
         /** v2 → v3: Add exercise HR samples, laps, and extra columns on exercise_sessions. */
         val MIGRATION_2_3 = object : Migration(2, 3) {
@@ -251,6 +251,13 @@ abstract class PulseDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_insights_date ON insights(date)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_insights_context_date ON insights(context, date)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_insights_category_date ON insights(category, date)")
+            }
+        }
+
+        /** v7 → v8: Add activityTotal column to summary_daily_metrics for dual-storage toggle. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE summary_daily_metrics ADD COLUMN activityTotal REAL DEFAULT NULL")
             }
         }
     }

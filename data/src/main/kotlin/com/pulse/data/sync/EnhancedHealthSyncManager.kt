@@ -462,6 +462,7 @@ class EnhancedHealthSyncManager @Inject constructor(
             }
         }
         exerciseDao.upsert(exerciseEntities)
+        exerciseDao.deduplicateOverlapping()
 
         // Enqueue Distance and ActiveCalories for compute engine
         val dirtyEntries = mutableListOf<ComputeQueueEntity>()

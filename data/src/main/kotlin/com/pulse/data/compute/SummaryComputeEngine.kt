@@ -1,7 +1,6 @@
 package com.pulse.data.compute
 
 import android.util.Log
-import com.pulse.data.datastore.PreferencesRepository
 import com.pulse.data.local.dao.ComputeQueueDao
 import com.pulse.data.local.dao.ExerciseSessionDao
 import com.pulse.data.local.dao.GoalDao
@@ -9,18 +8,14 @@ import com.pulse.data.local.dao.RawDailyMetricDao
 import com.pulse.data.local.dao.RawSampleDao
 import com.pulse.data.local.dao.SummaryDailyMetricDao
 import com.pulse.data.local.entity.ComputeQueueEntity
-import com.pulse.data.local.entity.RawDailyMetricEntity
 import com.pulse.data.local.entity.SummaryDailyMetricEntity
 import com.pulse.domain.model.MetricType
-import com.pulse.domain.usecase.ZoneMinuteCalculator
 import com.pulse.domain.util.Clock
 import kotlinx.datetime.DatePeriod
-import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.minus
 import kotlinx.datetime.toInstant
-import kotlinx.datetime.toLocalDateTime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -50,7 +45,6 @@ class SummaryComputeEngine @Inject constructor(
     private val computeQueueDao: ComputeQueueDao,
     private val exerciseDao: ExerciseSessionDao,
     private val goalDao: GoalDao,
-    private val prefsRepo: PreferencesRepository,
     private val clock: Clock,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -92,13 +86,12 @@ class SummaryComputeEngine @Inject constructor(
         Log.d(TAG, "Processing ${entries.size} compute queue entries")
 
         val goals = buildGoalMap()
-        val prefs = prefsRepo.getMetricDisplay()
         val nowMs = clock.now().toEpochMilliseconds()
 
         val byDate = entries.groupBy { it.date }
         for ((date, dateEntries) in byDate) {
             val metrics = dateEntries.map { it.metric }.toSet()
-            computeForDate(date, metrics, goals, prefs.activityOnlyDistance, prefs.activityOnlyCalories, nowMs)
+            computeForDate(date, metrics, goals, nowMs)
         }
 
         for (entry in entries) {
@@ -114,8 +107,6 @@ class SummaryComputeEngine @Inject constructor(
         date: String,
         metrics: Set<String>,
         goals: Map<MetricType, Double>,
-        activityOnlyDistance: Boolean,
-        activityOnlyCalories: Boolean,
         nowMs: Long,
     ) {
         val summaries = mutableListOf<SummaryDailyMetricEntity>()
@@ -125,52 +116,29 @@ class SummaryComputeEngine @Inject constructor(
 
             when (metric) {
                 MetricType.Distance -> {
-                    if (activityOnlyDistance) {
-                        // Use exercise session sum
-                        val exerciseDist = computeExerciseDistanceForDate(date)
-                        summaries += SummaryDailyMetricEntity(
-                            date = date, metric = MetricType.Distance.name,
-                            total = exerciseDist, goal = goals[MetricType.Distance],
-                            sampleCount = 1, computedAtMs = nowMs,
-                            sourceUsed = "exercise_sessions",
-                        )
-                    } else {
-                        // Use raw daily metric with source priority
-                        val resolved = resolveRawMetric(date, MetricType.Distance.name)
-                        if (resolved != null) {
-                            summaries += SummaryDailyMetricEntity(
-                                date = date, metric = MetricType.Distance.name,
-                                total = resolved.first, goal = goals[MetricType.Distance],
-                                sampleCount = 1, computedAtMs = nowMs,
-                                sourceUsed = resolved.second,
-                            )
-                        }
-                    }
+                    val rawResolved = resolveRawMetric(date, MetricType.Distance.name)
+                    val exerciseDist = computeExerciseDistanceForDate(date)
+                    summaries += SummaryDailyMetricEntity(
+                        date = date, metric = MetricType.Distance.name,
+                        total = rawResolved?.first ?: 0.0,
+                        activityTotal = exerciseDist,
+                        goal = goals[MetricType.Distance],
+                        sampleCount = 1, computedAtMs = nowMs,
+                        sourceUsed = rawResolved?.second ?: "none",
+                    )
                 }
                 MetricType.ActiveCalories -> {
-                    var total = 0.0
-                    var source = "raw"
-                    if (activityOnlyCalories) {
-                        val exerciseCals = computeExerciseCaloriesForDate(date)
-                        if (exerciseCals > 0) {
-                            total = exerciseCals
-                            source = "exercise_sessions"
-                        }
-                    }
-                    // Fall back to raw daily metric if no exercise data or not activity-only
-                    if (total <= 0) {
-                        val resolved = resolveRawMetric(date, MetricType.ActiveCalories.name)
-                        if (resolved != null) {
-                            total = resolved.first
-                            source = resolved.second
-                        }
-                    }
-                    if (total > 0) {
+                    val rawResolved = resolveRawMetric(date, MetricType.ActiveCalories.name)
+                    val exerciseCals = computeExerciseCaloriesForDate(date)
+                    val total = rawResolved?.first ?: 0.0
+                    if (total > 0 || exerciseCals > 0) {
                         summaries += SummaryDailyMetricEntity(
                             date = date, metric = MetricType.ActiveCalories.name,
-                            total = total, goal = goals[MetricType.ActiveCalories],
+                            total = total,
+                            activityTotal = if (exerciseCals > 0) exerciseCals else null,
+                            goal = goals[MetricType.ActiveCalories],
                             sampleCount = 1, computedAtMs = nowMs,
-                            sourceUsed = source,
+                            sourceUsed = rawResolved?.second ?: "none",
                         )
                     }
                 }

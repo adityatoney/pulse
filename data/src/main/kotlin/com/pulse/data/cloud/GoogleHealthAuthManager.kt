@@ -7,6 +7,8 @@ import android.content.Intent
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
+import com.pulse.data.local.dao.SyncStateDao
+import com.pulse.data.local.entity.SyncStateEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -28,12 +30,19 @@ sealed class GoogleHealthAuthOutcome {
 @Singleton
 class GoogleHealthAuthManager @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val syncStateDao: SyncStateDao,
 ) {
     private val mutex = Mutex()
     private var cachedToken: String? = null
     private var tokenExpiresAtMs: Long = 0L
 
     val isAuthenticated: Boolean get() = cachedToken != null
+
+    /** Check persisted state — call from ViewModel init to restore connected status. */
+    suspend fun isConnected(): Boolean {
+        if (cachedToken != null) return true
+        return syncStateDao.get(KEY_CONNECTED)?.value == "true"
+    }
 
     /**
      * Request authorization for Google Health scopes.
@@ -94,6 +103,7 @@ class GoogleHealthAuthManager @Inject constructor(
             cachedToken = null
             tokenExpiresAtMs = 0L
         }
+        syncStateDao.remove(KEY_CONNECTED)
     }
 
     private suspend fun cacheToken(token: String) {
@@ -101,11 +111,15 @@ class GoogleHealthAuthManager @Inject constructor(
             cachedToken = token
             tokenExpiresAtMs = System.currentTimeMillis() + 55 * 60 * 1000L
         }
+        syncStateDao.upsert(
+            SyncStateEntity(KEY_CONNECTED, "true", System.currentTimeMillis())
+        )
     }
 
     private fun isExpired(): Boolean = System.currentTimeMillis() >= tokenExpiresAtMs
 
     companion object {
+        private const val KEY_CONNECTED = "google_health_connected"
         private val SCOPES = listOf(
             "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
             "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
