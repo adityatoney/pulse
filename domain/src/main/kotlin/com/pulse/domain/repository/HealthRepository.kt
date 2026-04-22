@@ -8,6 +8,8 @@ import com.pulse.domain.model.RoutePoint
 import com.pulse.domain.model.HealthMetric
 import com.pulse.domain.model.MetricSeries
 import com.pulse.domain.model.MetricType
+import com.pulse.domain.model.DailyHrRange
+import com.pulse.domain.model.HrSample
 import com.pulse.domain.model.SleepSummary
 import com.pulse.domain.model.TodaySummary
 import kotlinx.coroutines.flow.Flow
@@ -26,6 +28,12 @@ interface HealthRepository {
     fun observeExerciseSessions(range: DateRange): Flow<List<ExerciseSession>>
 
     fun observeSleep(date: LocalDate): Flow<SleepSummary?>
+
+    fun observeSleepRange(range: DateRange): Flow<List<SleepSummary>>
+
+    fun observeIntradayHr(date: LocalDate): Flow<List<HrSample>>
+
+    fun observeHrDailyRanges(range: DateRange): Flow<List<DailyHrRange>>
 
     /** Pull fresh readings from Health Connect and write them to the local cache. */
     suspend fun refreshFromHealthConnect(range: DateRange): Result<Unit>

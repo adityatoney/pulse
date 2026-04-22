@@ -18,6 +18,8 @@ fun NavGraphBuilder.dashboardScreen(
     onNavigateToChat: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToDebug: () -> Unit,
+    onNavigateToSleep: () -> Unit = {},
+    onNavigateToHrDetail: () -> Unit = {},
 ) {
     composable<Dashboard> {
         DashboardRoute(
@@ -29,6 +31,8 @@ fun NavGraphBuilder.dashboardScreen(
             onNavigateToChat = onNavigateToChat,
             onNavigateToProfile = onNavigateToProfile,
             onNavigateToDebug = onNavigateToDebug,
+            onNavigateToSleep = onNavigateToSleep,
+            onNavigateToHrDetail = onNavigateToHrDetail,
         )
     }
 }

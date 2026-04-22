@@ -64,3 +64,28 @@ data class DeltaPercent(val value: Float, val direction: TrendDirection) {
         }
     }
 }
+
+data class MetricTrend(
+    val metric: MetricType,
+    val recentAvg: Double,
+    val priorAvg: Double,
+    val delta: DeltaPercent?,
+    val sparklinePoints: List<Float>,
+)
+
+data class MoveStreak(
+    val currentStreak: Int,
+    val longestStreak: Int,
+    val lastClosedDate: LocalDate?,
+)
+
+data class WeeklyChallenge(
+    val id: String,
+    val title: String,
+    val description: String,
+    val metric: MetricType?,
+    val targetValue: Double,
+    val currentValue: Double,
+    val progress: Float,
+    val isComplete: Boolean,
+)

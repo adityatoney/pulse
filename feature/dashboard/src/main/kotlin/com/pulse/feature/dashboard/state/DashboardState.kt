@@ -3,13 +3,16 @@ package com.pulse.feature.dashboard.state
 import com.pulse.domain.model.DeltaPercent
 import com.pulse.domain.model.DeviceStatus
 import com.pulse.domain.model.ExerciseSession
+import com.pulse.domain.model.HrSample
 import com.pulse.domain.model.Insight
 import com.pulse.domain.model.MetricType
+import com.pulse.domain.model.MoveStreak
 import com.pulse.domain.model.SyncStatus
 import com.pulse.domain.model.Timeframe
 import com.pulse.domain.model.TodayMetrics
 import com.pulse.domain.model.UserChrome
 import com.pulse.domain.model.RecoveryBlock
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 
 /** Single immutable render bag for DashboardScreen. */
@@ -33,9 +36,12 @@ data class DashboardState(
     val restingHr: Double? = null,
     val weight: Double? = null,
     val spo2: Double? = null,
-    val hrv: Double? = null,
+    val intradayHrSamples: List<HrSample> = emptyList(),
+    val currentHrBpm: Int? = null,
+    val lastHrSampleAt: Instant? = null,
     val activityOnlyDistance: Boolean = false,
     val activityOnlyCalories: Boolean = false,
+    val moveStreak: MoveStreak? = null,
 )
 
 sealed interface DashboardError {
@@ -64,6 +70,8 @@ sealed interface DashboardIntent {
     data object OpenDebugMenu : DashboardIntent
     data object ToggleDistanceMode : DashboardIntent
     data object ToggleCaloriesMode : DashboardIntent
+    data object OpenSleepDetail : DashboardIntent
+    data object OpenHrDetail : DashboardIntent
 }
 
 sealed interface DashboardEffect {
@@ -78,4 +86,6 @@ sealed interface DashboardEffect {
     data class ShowSnackbar(val message: String) : DashboardEffect
     data object RequestHealthConnectPermissions : DashboardEffect
     data object LaunchPlayStoreForHealthConnect : DashboardEffect
+    data object NavigateToSleepDetail : DashboardEffect
+    data object NavigateToHrDetail : DashboardEffect
 }

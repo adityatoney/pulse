@@ -3,8 +3,10 @@ package com.pulse.feature.insights.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
@@ -42,7 +44,9 @@ import com.pulse.feature.insights.state.InsightsEffect
 import com.pulse.feature.insights.state.InsightsIntent
 import com.pulse.feature.insights.state.InsightsState
 import com.pulse.feature.insights.ui.components.ActivityHeatmap
+import com.pulse.feature.insights.ui.components.ChallengeCard
 import com.pulse.feature.insights.ui.components.MetricPositionStrip
+import com.pulse.feature.insights.ui.components.TrendCard
 import com.pulse.feature.insights.ui.components.WeeklyBarsChart
 import com.pulse.feature.insights.viewmodel.InsightsViewModel
 
@@ -106,7 +110,9 @@ fun InsightsScreen(
                 state.longitudinalInsights.isNotEmpty() ||
                 state.weeklyBars.isNotEmpty() ||
                 state.heatmapDays.isNotEmpty() ||
-                state.todayPosition != null
+                state.todayPosition != null ||
+                state.trends.isNotEmpty() ||
+                state.weeklyChallenges.isNotEmpty()
 
             if (!hasAnyContent && !state.loading) {
                 Spacer(Modifier.height(32.dp))
@@ -143,10 +149,48 @@ fun InsightsScreen(
                 }
             }
 
+            // ── Trends ──
+            if (state.trends.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                SectionHeader("Trends")
+                Text(
+                    "Last 30 days vs prior 30 days",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                val trendPairs = state.trends.chunked(2)
+                trendPairs.forEachIndexed { rowIndex, pair ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        pair.forEachIndexed { colIndex, trend ->
+                            TrendCard(
+                                trend = trend,
+                                modifier = Modifier.weight(1f),
+                                animationDelay = (rowIndex * 2 + colIndex) * 80,
+                            )
+                        }
+                        if (pair.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+
             // ── This Week ──
-            if (state.weeklyInsights.isNotEmpty() || state.weeklyBars.isNotEmpty()) {
+            if (state.weeklyInsights.isNotEmpty() || state.weeklyBars.isNotEmpty() || state.weeklyChallenges.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 SectionHeader("This Week")
+
+                // Weekly challenges
+                if (state.weeklyChallenges.isNotEmpty()) {
+                    SubSectionLabel("Challenges")
+                    state.weeklyChallenges.forEach { challenge ->
+                        ChallengeCard(challenge = challenge)
+                    }
+                }
 
                 // Weekly bar chart
                 if (state.weeklyBars.isNotEmpty()) {

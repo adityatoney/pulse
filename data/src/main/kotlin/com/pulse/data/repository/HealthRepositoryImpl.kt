@@ -25,6 +25,8 @@ import com.pulse.domain.model.MeasurementUnit
 import com.pulse.domain.model.MetricSeries
 import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.MetricValue
+import com.pulse.domain.model.DailyHrRange
+import com.pulse.domain.model.HrSample
 import com.pulse.domain.model.RecoveryBlock
 import com.pulse.domain.model.SeriesPoint
 import com.pulse.domain.model.SleepSummary
@@ -69,6 +71,7 @@ class HealthRepositoryImpl @Inject constructor(
     private val lapDao: com.pulse.data.local.dao.ExerciseLapDao,
     private val routePointDao: com.pulse.data.local.dao.ExerciseRoutePointDao,
     private val sleepDao: com.pulse.data.local.dao.SleepSessionDao,
+    private val rawSampleDao: com.pulse.data.local.dao.RawSampleDao,
     private val goalDao: GoalDao,
     private val prefsRepo: PreferencesRepository,
     private val clock: Clock,
@@ -429,6 +432,53 @@ class HealthRepositoryImpl @Inject constructor(
                     awakeMinutes = it.awakeMinutes,
                 )
             }
+        }
+    }
+
+    override fun observeSleepRange(range: com.pulse.domain.model.DateRange): Flow<List<SleepSummary>> {
+        val fromMs = range.start.atStartOfDayMillis() - 12 * 60 * 60 * 1000L
+        val toMs = range.endInclusive.atStartOfDayMillis() + 12 * 60 * 60 * 1000L
+        return sleepDao.observeRange(fromMs, toMs).map { entities ->
+            entities.map { e ->
+                SleepSummary(
+                    start = Instant.fromEpochMilliseconds(e.startUtcMs),
+                    end = Instant.fromEpochMilliseconds(e.endUtcMs),
+                    totalMinutes = e.totalMinutes,
+                    deepMinutes = e.deepMinutes,
+                    remMinutes = e.remMinutes,
+                    lightMinutes = e.lightMinutes,
+                    awakeMinutes = e.awakeMinutes,
+                )
+            }
+        }
+    }
+
+    override fun observeIntradayHr(date: LocalDate): Flow<List<HrSample>> {
+        val startMs = date.atStartOfDayMillis()
+        val endMs = startMs + 24 * 60 * 60 * 1000L
+        return rawSampleDao.observeRange("HeartRate", startMs, endMs).map { entities ->
+            entities.map { HrSample(it.startUtcMs, it.value.toInt()) }
+        }
+    }
+
+    override fun observeHrDailyRanges(range: com.pulse.domain.model.DateRange): Flow<List<DailyHrRange>> {
+        val startMs = range.start.atStartOfDayMillis()
+        val endMs = range.endInclusive.atStartOfDayMillis() + 24 * 60 * 60 * 1000L
+        val tz = TimeZone.currentSystemDefault()
+        return rawSampleDao.observeRange("HeartRate", startMs, endMs).map { entities ->
+            entities.groupBy { e ->
+                Instant.fromEpochMilliseconds(e.startUtcMs).toLocalDateTime(tz).date
+            }.mapNotNull { (date, samples) ->
+                if (samples.isEmpty()) return@mapNotNull null
+                val bpmValues = samples.map { it.value.toInt() }
+                DailyHrRange(
+                    date = date,
+                    minBpm = bpmValues.min(),
+                    maxBpm = bpmValues.max(),
+                    avgBpm = bpmValues.average().toInt(),
+                    restingBpm = null, // filled below if available
+                )
+            }.sortedBy { it.date }
         }
     }
 

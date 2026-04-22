@@ -51,6 +51,12 @@ import com.pulse.feature.insights.navigation.heatmapDetailScreen
 import com.pulse.feature.insights.navigation.insightsScreen
 import com.pulse.feature.you.navigation.YouProfile
 import com.pulse.feature.you.navigation.youScreen
+import com.pulse.feature.sleep.navigation.SleepOverview
+import com.pulse.feature.sleep.navigation.SleepNightDetail
+import com.pulse.feature.sleep.navigation.sleepOverviewScreen
+import com.pulse.feature.sleep.navigation.sleepNightScreen
+import com.pulse.feature.detail.navigation.HrDetail
+import com.pulse.feature.detail.navigation.hrDetailScreen
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -243,6 +249,8 @@ fun FitbitNavHost(hcDataSource: HealthConnectDataSource) {
             onNavigateToDebug = {
                 if (BuildConfig.DEBUG_MENU_ENABLED) nav.navigate(DebugMenu)
             },
+            onNavigateToSleep = { nav.navigate(SleepOverview) },
+            onNavigateToHrDetail = { nav.navigate(HrDetail) },
         )
         metricDetailScreen(onBack = { nav.popBackStack() })
         exerciseLogScreen(
@@ -257,5 +265,11 @@ fun FitbitNavHost(hcDataSource: HealthConnectDataSource) {
         )
         heatmapDetailScreen(onBack = { nav.popBackStack() })
         debugMenuScreen(onDismiss = { nav.popBackStack() })
+        sleepOverviewScreen(
+            onBack = { nav.popBackStack() },
+            onNavigateToNight = { dateStr -> nav.navigate(SleepNightDetail(dateStr)) },
+        )
+        sleepNightScreen(onBack = { nav.popBackStack() })
+        hrDetailScreen(onBack = { nav.popBackStack() })
     }
 }

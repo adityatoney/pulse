@@ -114,11 +114,29 @@ class MetricDetailViewModel @Inject constructor(
         val comparisonFlows = comparisonAnchors.map { anchor ->
             getSeries(s.metric, anchor, comparisonTf)
         }
+        // Align WoW/MoM anchor to the end of the displayed period so the
+        // comparison window matches the dates the user actually sees.
+        val today = clock.today()
+        val deltaAnchor = when (s.timeframe) {
+            Timeframe.Week -> {
+                // Snap to Sunday of the displayed calendar week (Mon-Sun)
+                val dow = s.periodAnchor.dayOfWeek.ordinal // Monday=0
+                val sunday = s.periodAnchor.plus(DatePeriod(days = 6 - dow))
+                if (sunday > today) today else sunday
+            }
+            Timeframe.Month -> {
+                // Snap to last day of the displayed month
+                val first = LocalDate(s.periodAnchor.year, s.periodAnchor.monthNumber, 1)
+                val lastDay = first.plus(DatePeriod(months = 1)).minus(DatePeriod(days = 1))
+                if (lastDay > today) today else lastDay
+            }
+            else -> s.periodAnchor
+        }
         @Suppress("UNCHECKED_CAST")
         val allFlows: List<Flow<Any?>> = listOf(
             getSeries(s.metric, s.periodAnchor, s.timeframe) as Flow<Any?>,
-            calcWoW(s.metric, s.periodAnchor) as Flow<Any?>,
-            calcMoM(s.metric, s.periodAnchor) as Flow<Any?>,
+            calcWoW(s.metric, deltaAnchor) as Flow<Any?>,
+            calcMoM(s.metric, deltaAnchor) as Flow<Any?>,
         ) + comparisonFlows.map { it as Flow<Any?> }
 
         streamJob = combine(allFlows) { results ->

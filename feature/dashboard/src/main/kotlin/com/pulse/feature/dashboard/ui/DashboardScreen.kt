@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -71,12 +73,15 @@ import com.pulse.core.designsystem.theme.LocalRingPalette
 import com.pulse.core.ui.badges.DeltaDirection
 import com.pulse.core.ui.badges.WoWMoMBadge
 import com.pulse.core.ui.insights.InsightCard
+import com.pulse.core.ui.insights.InsightCardData
+import com.pulse.core.ui.insights.InsightCarousel
 import com.pulse.core.ui.insights.InsightSentimentUi
 import com.pulse.core.ui.chrome.BatteryChip
 import com.pulse.core.ui.chrome.DateScrollerRow
 import com.pulse.core.ui.ring.ActivityRingHero
 import com.pulse.core.ui.ring.SecondaryRingTile
 import com.pulse.core.ui.ring.ToggleableRingTile
+import com.pulse.core.ui.streak.StreakBadge
 import com.pulse.core.ui.sync.SyncChipState
 import com.pulse.core.ui.sync.SyncStatusChip
 import com.pulse.core.ui.util.formatted
@@ -110,6 +115,8 @@ fun DashboardRoute(
     onNavigateToChat: () -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToDebug: () -> Unit,
+    onNavigateToSleep: () -> Unit = {},
+    onNavigateToHrDetail: () -> Unit = {},
     viewModel: DashboardViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -130,6 +137,8 @@ fun DashboardRoute(
                     DashboardEffect.NavigateToProfile -> onNavigateToProfile()
                     DashboardEffect.NavigateToDebugMenu -> onNavigateToDebug()
                     is DashboardEffect.ShowSnackbar -> snackbarState.showSnackbar(effect.message)
+                    DashboardEffect.NavigateToSleepDetail -> onNavigateToSleep()
+                    DashboardEffect.NavigateToHrDetail -> onNavigateToHrDetail()
                     DashboardEffect.RequestHealthConnectPermissions,
                     DashboardEffect.LaunchPlayStoreForHealthConnect -> {
                         // handled by :app permission host
@@ -351,27 +360,53 @@ fun DashboardScreen(
                         deltaPct = state.mom?.value,
                         direction = state.mom?.direction?.toDirection(),
                     )
-                }
-            }
-
-            if (state.insights.isNotEmpty()) {
-                item {
-                    Column(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        state.insights.forEach { insight ->
-                            InsightCard(
-                                headline = insight.headline,
-                                body = insight.body,
-                                sentiment = insight.sentiment.toUi(),
+                    state.moveStreak?.let { streak ->
+                        if (streak.currentStreak > 0) {
+                            StreakBadge(
+                                currentStreak = streak.currentStreak,
+                                longestStreak = streak.longestStreak,
                             )
                         }
                     }
                 }
             }
 
-            item { RecoverySection(state) }
+            if (state.insights.isNotEmpty()) {
+                val streakInsights = state.insights.filter { it.type == com.pulse.domain.model.InsightType.Streak }
+                val otherInsights = state.insights.filter { it.type != com.pulse.domain.model.InsightType.Streak }
+
+                if (streakInsights.isNotEmpty()) {
+                    item {
+                        @OptIn(ExperimentalLayoutApi::class)
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            streakInsights.forEach { insight ->
+                                StreakChip(headline = insight.headline)
+                            }
+                        }
+                    }
+                }
+
+                if (otherInsights.isNotEmpty()) {
+                    item {
+                        InsightCarousel(
+                            insights = otherInsights.map { insight ->
+                                InsightCardData(
+                                    headline = insight.headline,
+                                    body = insight.body,
+                                    sentiment = insight.sentiment.toUi(),
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        )
+                    }
+                }
+            }
+
+            item { RecoverySection(state, onIntent) }
 
             item { BodyMetricsSection(state, onIntent) }
 
@@ -495,7 +530,7 @@ private fun ExerciseSessionCard(session: ExerciseSession, onClick: () -> Unit = 
 }
 
 @Composable
-private fun RecoverySection(state: DashboardState) {
+private fun RecoverySection(state: DashboardState, onIntent: (DashboardIntent) -> Unit) {
     val sleep = state.recovery?.sleep
     Column(
         Modifier
@@ -508,29 +543,30 @@ private fun RecoverySection(state: DashboardState) {
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(12.dp))
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(20.dp),
+        Surface(
+            onClick = { onIntent(DashboardIntent.OpenSleepDetail) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.NightsStay, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(
-                        sleep?.let { "${it.totalMinutes / 60}h ${it.totalMinutes % 60}m" } ?: "No data",
-                        style = MaterialTheme.typography.headlineSmall,
-                    )
-                    Text("Sleep duration", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.NightsStay, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            sleep?.let { "${it.totalMinutes / 60}h ${it.totalMinutes % 60}m" } ?: "No data",
+                            style = MaterialTheme.typography.headlineSmall,
+                        )
+                        Text("Sleep duration", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
-            }
-            if (sleep != null && sleep.deepMinutes != null) {
-                Spacer(Modifier.height(16.dp))
-                SleepStageBar(sleep)
-                Spacer(Modifier.height(8.dp))
-                SleepStageLegend(sleep)
+                if (sleep != null && sleep.deepMinutes != null) {
+                    Spacer(Modifier.height(16.dp))
+                    SleepStageBar(sleep)
+                    Spacer(Modifier.height(8.dp))
+                    SleepStageLegend(sleep)
+                }
             }
         }
     }
@@ -596,7 +632,8 @@ private fun SleepStageLegend(sleep: com.pulse.domain.model.SleepSummary) {
 
 @Composable
 private fun BodyMetricsSection(state: DashboardState, onIntent: (DashboardIntent) -> Unit) {
-    val hasAny = state.restingHr != null || state.weight != null || state.spo2 != null || state.hrv != null
+    val hasHr = state.intradayHrSamples.isNotEmpty() || state.restingHr != null
+    val hasAny = hasHr || state.weight != null || state.spo2 != null
     if (!hasAny) return
 
     Column(
@@ -610,54 +647,98 @@ private fun BodyMetricsSection(state: DashboardState, onIntent: (DashboardIntent
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(12.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            state.restingHr?.let { hr ->
-                BodyMetricCard(
-                    icon = Icons.Outlined.Favorite,
-                    value = "${hr.toInt()}",
-                    unit = "bpm",
-                    label = "Resting HR",
-                    onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.RestingHeartRate)) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            state.spo2?.let { spo2 ->
-                BodyMetricCard(
-                    icon = Icons.Outlined.WaterDrop,
-                    value = "${spo2.toInt()}",
-                    unit = "%",
-                    label = "SpO2",
-                    onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.SpO2)) },
-                    modifier = Modifier.weight(1f),
-                )
+
+        // HR Dashboard Card — full width
+        if (hasHr) {
+            HrDashboardCard(state = state, onIntent = onIntent)
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // Remaining body metrics: SpO2 | Weight
+        val hasSpO2 = state.spo2 != null
+        val hasWeight = state.weight != null
+        if (hasSpO2 || hasWeight) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                state.spo2?.let { spo2 ->
+                    BodyMetricCard(
+                        icon = Icons.Outlined.WaterDrop,
+                        value = "${spo2.toInt()}",
+                        unit = "%",
+                        label = "SpO2",
+                        onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.SpO2)) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                state.weight?.let { w ->
+                    BodyMetricCard(
+                        icon = Icons.Outlined.MonitorWeight,
+                        value = "%.1f".format(w),
+                        unit = "lbs",
+                        label = "Weight",
+                        onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.Weight)) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            state.weight?.let { w ->
-                BodyMetricCard(
-                    icon = Icons.Outlined.MonitorWeight,
-                    value = "%.1f".format(w),
-                    unit = "lbs",
-                    label = "Weight",
-                    onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.Weight)) },
-                    modifier = Modifier.weight(1f),
-                )
+    }
+}
+
+@Composable
+private fun HrDashboardCard(state: DashboardState, onIntent: (DashboardIntent) -> Unit) {
+    androidx.compose.material3.Card(
+        onClick = { onIntent(DashboardIntent.OpenHrDetail) },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Favorite, contentDescription = null, tint = Color(0xFFE53935), modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = state.currentHrBpm?.toString() ?: state.restingHr?.toInt()?.toString() ?: "--",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text("bpm", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        state.restingHr?.let { rhr ->
+                            Text(
+                                "Resting: ${rhr.toInt()} bpm",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                state.lastHrSampleAt?.let { lastAt ->
+                    Text(
+                        text = lastAt.relativeTo(KtxClock.System.now()),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            state.hrv?.let { hrv ->
-                BodyMetricCard(
-                    icon = Icons.Outlined.TrendingUp,
-                    value = "${hrv.toInt()}",
-                    unit = "ms",
-                    label = "HRV",
-                    onClick = { onIntent(DashboardIntent.SelectMetric(MetricType.HRV)) },
-                    modifier = Modifier.weight(1f),
+            if (state.intradayHrSamples.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                com.pulse.core.ui.charts.IntradayHrChart(
+                    points = state.intradayHrSamples.map { com.pulse.core.ui.charts.HrChartPoint(it.timestampMs, it.bpm) },
+                    modifier = Modifier.fillMaxWidth().height(80.dp),
+                    compact = true,
                 )
             }
         }
@@ -691,5 +772,31 @@ private fun BodyMetricCard(
             }
             Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun StreakChip(headline: String, modifier: Modifier = Modifier) {
+    val tint = Color(0xFFCC8800)
+    val bg = tint.copy(alpha = 0.10f)
+    Row(
+        modifier = modifier
+            .background(bg, RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.LocalFireDepartment,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = headline,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            color = tint,
+        )
     }
 }

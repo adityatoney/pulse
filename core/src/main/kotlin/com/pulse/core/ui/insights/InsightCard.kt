@@ -2,6 +2,7 @@ package com.pulse.core.ui.insights
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -21,13 +25,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.pulse.core.designsystem.theme.SuccessGreen
 import com.pulse.core.designsystem.theme.WarnAmber
+import kotlinx.coroutines.delay
 
 enum class InsightSentimentUi { Positive, Neutral, Negative, Celebratory }
 
@@ -78,6 +85,83 @@ fun InsightCard(
     }
 }
 
+data class InsightCardData(
+    val headline: String,
+    val body: String,
+    val sentiment: InsightSentimentUi,
+)
+
+/**
+ * A single-card-height carousel that auto-rotates through insights
+ * with dot indicators. Also swipeable manually.
+ */
+@Composable
+fun InsightCarousel(
+    insights: List<InsightCardData>,
+    modifier: Modifier = Modifier,
+    autoRotateMs: Long = 5_000L,
+) {
+    if (insights.isEmpty()) return
+    if (insights.size == 1) {
+        InsightCard(
+            headline = insights[0].headline,
+            body = insights[0].body,
+            sentiment = insights[0].sentiment,
+            modifier = modifier,
+        )
+        return
+    }
+
+    val pagerState = rememberPagerState(pageCount = { insights.size })
+
+    // Auto-rotate
+    LaunchedEffect(pagerState, insights.size) {
+        while (true) {
+            delay(autoRotateMs)
+            val next = (pagerState.currentPage + 1) % insights.size
+            pagerState.animateScrollToPage(next)
+        }
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxWidth(),
+        ) { page ->
+            val insight = insights[page]
+            InsightCard(
+                headline = insight.headline,
+                body = insight.body,
+                sentiment = insight.sentiment,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Dot indicators
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            insights.forEachIndexed { i, _ ->
+                val isActive = pagerState.currentPage == i
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 3.dp)
+                        .size(if (isActive) 7.dp else 5.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isActive) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                        ),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun InsightCardList(
     insights: List<InsightCardData>,
@@ -97,9 +181,3 @@ fun InsightCardList(
         }
     }
 }
-
-data class InsightCardData(
-    val headline: String,
-    val body: String,
-    val sentiment: InsightSentimentUi,
-)

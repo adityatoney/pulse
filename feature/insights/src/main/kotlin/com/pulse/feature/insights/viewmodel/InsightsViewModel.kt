@@ -7,6 +7,8 @@ import com.pulse.domain.model.MetricType
 import com.pulse.domain.model.Timeframe
 import com.pulse.domain.repository.Bucket
 import com.pulse.domain.repository.HealthRepository
+import com.pulse.domain.usecase.CalculateTrendsUseCase
+import com.pulse.domain.usecase.GenerateWeeklyChallengesUseCase
 import com.pulse.domain.usecase.GetInsightsUseCase
 import com.pulse.domain.usecase.GetMetricSeriesUseCase
 import com.pulse.domain.util.Clock
@@ -39,6 +41,8 @@ class InsightsViewModel @Inject constructor(
     private val getInsights: GetInsightsUseCase,
     private val getMetricSeries: GetMetricSeriesUseCase,
     private val healthRepo: HealthRepository,
+    private val calculateTrends: CalculateTrendsUseCase,
+    private val generateChallenges: GenerateWeeklyChallengesUseCase,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -105,6 +109,22 @@ class InsightsViewModel @Inject constructor(
                 )
             }
             _state.update { it.copy(weeklyBars = bars) }
+        }.launchIn(viewModelScope)
+
+        // ── Trends ──
+
+        val trendMetrics = listOf(
+            MetricType.Steps, MetricType.Distance, MetricType.ActiveCalories,
+            MetricType.ZoneMinutes, MetricType.Sleep, MetricType.RestingHeartRate,
+        )
+        calculateTrends(trendMetrics, todayDate).onEach { trends ->
+            _state.update { it.copy(trends = trends) }
+        }.launchIn(viewModelScope)
+
+        // ── Weekly Challenges ──
+
+        generateChallenges(todayDate).onEach { challenges ->
+            _state.update { it.copy(weeklyChallenges = challenges) }
         }.launchIn(viewModelScope)
 
         // ── Visual: heatmap ──

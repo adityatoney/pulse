@@ -1,6 +1,10 @@
 package com.pulse.feature.exercise.ui
 
 import android.util.Log
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,13 +24,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.DirectionsRun
+import androidx.compose.material.icons.automirrored.outlined.DirectionsRun
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Straighten
 import androidx.compose.material.icons.outlined.Terrain
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.automirrored.outlined.TrendingUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -41,15 +46,24 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -477,6 +491,13 @@ private fun ZoneLegendDot(color: Color, label: String) {
 
 // ── Stats Section ────────────────────────────────────────────────────────────
 
+private val DurationColor = Color(0xFF42A5F5)
+private val DistanceColor = Color(0xFF66BB6A)
+private val CaloriesColor = Color(0xFFFF7043)
+private val StepsColor = Color(0xFF7C4DFF)
+private val ZoneColor = Color(0xFFE53935)
+private val PaceColor = Color(0xFF26A69A)
+
 @Composable
 private fun StatsSection(detail: ExerciseDetail) {
     val session = detail.session
@@ -487,47 +508,336 @@ private fun StatsSection(detail: ExerciseDetail) {
         "${durationMin}m ${secs}s"
     }
     val distMi = session.distanceMeters?.let { it / METERS_PER_MILE }
-    val distStr = distMi?.let { "%.2f mi".format(it) } ?: "--"
-    val calStr = session.calories?.toInt()?.toString() ?: "--"
+    val distStr = distMi?.let { "%.2f" .format(it) } ?: "--"
+    val calStr = session.calories?.toInt()?.let { "%,d".format(it) } ?: "--"
     val stepsStr = detail.steps?.let { "%,d".format(it) } ?: "--"
-    val zoneStr = detail.zoneMinutes?.toString() ?: "--"
+    val zoneMin = detail.zoneMinutes
     val paceStr = detail.avgPaceSecondsPerMile?.let {
         "%d'%02d\"".format(it / 60, it % 60)
-    } ?: "--"
+    }
 
-    Column(Modifier.padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("Duration", durationStr, Icons.Outlined.Timer, Modifier.weight(1f))
-            StatCard("Distance", distStr, Icons.Outlined.Straighten, Modifier.weight(1f))
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Duration hero ring
+        DurationHeroRing(
+            durationLabel = durationStr,
+            durationMinutes = durationMin,
+        )
+
+        // Key metrics panel: Distance | Calories | Steps
+        KeyMetricsPanel(
+            distStr = distStr,
+            calStr = calStr,
+            stepsStr = stepsStr,
+            hasDistance = distMi != null,
+        )
+
+        // Performance panel: Zone Minutes + Avg Pace
+        if (zoneMin != null || paceStr != null) {
+            PerformancePanel(
+                zoneMinutes = zoneMin,
+                paceStr = paceStr,
+                durationMinutes = durationMin,
+            )
         }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("Calories", "$calStr cal", Icons.Outlined.LocalFireDepartment, Modifier.weight(1f))
-            StatCard("Steps", stepsStr, Icons.Outlined.DirectionsRun, Modifier.weight(1f))
+    }
+}
+
+// ── Duration Hero Ring ──────────────────────────────────────────────────
+
+@Composable
+private fun DurationHeroRing(
+    durationLabel: String,
+    durationMinutes: Long,
+) {
+    // Progress arc based on workout length (60 min = full ring)
+    val targetProgress = (durationMinutes / 60f).coerceIn(0f, 1f)
+    var appeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { appeared = true }
+    val animProgress by animateFloatAsState(
+        targetValue = if (appeared) targetProgress else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "durationRing",
+    )
+
+    val arcColor = DurationColor
+    val trackColor = arcColor.copy(alpha = 0.12f)
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Box(modifier = Modifier.size(120.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.size(120.dp)) {
+                    val stroke = 10.dp.toPx()
+                    val arcSize = Size(size.width - stroke, size.height - stroke)
+                    val topLeft = Offset(stroke / 2f, stroke / 2f)
+
+                    drawArc(trackColor, 0f, 360f, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            listOf(arcColor.copy(alpha = 0.6f), arcColor),
+                        ),
+                        startAngle = -90f,
+                        sweepAngle = 360f * animProgress,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = Stroke(stroke, cap = StrokeCap.Round),
+                    )
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Outlined.Timer, contentDescription = null, tint = arcColor, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        durationLabel,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("Duration", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatCard("Zone min", zoneStr, Icons.Outlined.FavoriteBorder, Modifier.weight(1f))
-            StatCard("Avg pace", "$paceStr /mi", Icons.Outlined.Speed, Modifier.weight(1f))
+    }
+}
+
+// ── Key Metrics Panel ───────────────────────────────────────────────────
+
+@Composable
+private fun KeyMetricsPanel(
+    distStr: String,
+    calStr: String,
+    stepsStr: String,
+    hasDistance: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Row(
+            Modifier.padding(20.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MetricStatTile(
+                icon = Icons.Outlined.Straighten,
+                iconTint = DistanceColor,
+                value = distStr,
+                unit = if (hasDistance) "mi" else "",
+                label = "Distance",
+                modifier = Modifier.weight(1f),
+            )
+
+            Box(
+                Modifier
+                    .width(1.dp)
+                    .height(56.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            )
+
+            MetricStatTile(
+                icon = Icons.Outlined.LocalFireDepartment,
+                iconTint = CaloriesColor,
+                value = calStr,
+                unit = "cal",
+                label = "Calories",
+                modifier = Modifier.weight(1f),
+            )
+
+            Box(
+                Modifier
+                    .width(1.dp)
+                    .height(56.dp)
+                    .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            )
+
+            MetricStatTile(
+                icon = Icons.AutoMirrored.Outlined.DirectionsRun,
+                iconTint = StepsColor,
+                value = stepsStr,
+                unit = "",
+                label = "Steps",
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
 
 @Composable
-private fun StatCard(label: String, value: String, icon: ImageVector, modifier: Modifier = Modifier) {
+private fun MetricStatTile(
+    icon: ImageVector,
+    iconTint: Color,
+    value: String,
+    unit: String,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(iconTint.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (unit.isNotEmpty()) {
+                Spacer(Modifier.width(2.dp))
+                Text(
+                    unit,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+// ── Performance Panel ───────────────────────────────────────────────────
+
+@Composable
+private fun PerformancePanel(
+    zoneMinutes: Int?,
+    paceStr: String?,
+    durationMinutes: Long,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // Zone Minutes card with intensity ring
+        if (zoneMinutes != null) {
+            PerformanceCard(
+                icon = Icons.AutoMirrored.Outlined.TrendingUp,
+                iconBgColor = ZoneColor,
+                value = "$zoneMinutes",
+                unit = "min",
+                label = "Zone Minutes",
+                ring = {
+                    IntensityMiniRing(
+                        value = zoneMinutes,
+                        max = durationMinutes.toInt().coerceAtLeast(1),
+                        color = ZoneColor,
+                    )
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        // Avg Pace card
+        if (paceStr != null) {
+            PerformanceCard(
+                icon = Icons.Outlined.Speed,
+                iconBgColor = PaceColor,
+                value = paceStr,
+                unit = "/mi",
+                label = "Avg Pace",
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PerformanceCard(
+    icon: ImageVector,
+    iconBgColor: Color,
+    value: String,
+    unit: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    ring: (@Composable () -> Unit)? = null,
+) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        color = iconBgColor.copy(alpha = 0.08f),
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text(value, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
-                Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (ring != null) {
+                ring()
+            } else {
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(iconBgColor.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(icon, contentDescription = null, tint = iconBgColor, modifier = Modifier.size(24.dp))
+                }
             }
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    value,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    unit,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
         }
+    }
+}
+
+@Composable
+private fun IntensityMiniRing(value: Int, max: Int, color: Color) {
+    val fraction = (value.toFloat() / max).coerceIn(0f, 1f)
+    var appeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { appeared = true }
+    val animProgress by animateFloatAsState(
+        targetValue = if (appeared) fraction else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "intensityRing",
+    )
+
+    Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(44.dp)) {
+            val stroke = 5.dp.toPx()
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+            val topLeft = Offset(stroke / 2f, stroke / 2f)
+            drawArc(color.copy(alpha = 0.15f), 0f, 360f, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+            drawArc(color, -90f, 360f * animProgress, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+        }
+        Icon(Icons.AutoMirrored.Outlined.TrendingUp, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
     }
 }
 

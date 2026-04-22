@@ -42,7 +42,8 @@ import com.pulse.core.ui.badges.DeltaDirection
 import com.pulse.core.ui.badges.WoWMoMBadge
 import com.pulse.core.ui.charts.MetricBar
 import com.pulse.core.ui.charts.MetricBarsChart
-import com.pulse.core.ui.insights.InsightCard
+import com.pulse.core.ui.insights.InsightCardData
+import com.pulse.core.ui.insights.InsightCarousel
 import com.pulse.core.ui.insights.InsightSentimentUi
 import com.pulse.core.ui.list.PeriodComparisonList
 import com.pulse.core.ui.list.PeriodComparisonRow
@@ -157,18 +158,16 @@ fun MetricDetailScreen(
             }
             if (state.insights.isNotEmpty()) {
                 item {
-                    Column(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        state.insights.forEach { insight ->
-                            InsightCard(
+                    InsightCarousel(
+                        insights = state.insights.map { insight ->
+                            InsightCardData(
                                 headline = insight.headline,
                                 body = insight.body,
                                 sentiment = insight.sentiment.toDetailUi(),
                             )
-                        }
-                    }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    )
                 }
             }
             item {

@@ -68,6 +68,7 @@ dependencies {
     implementation(project(":feature:exercise"))
     implementation(project(":feature:you"))
     implementation(project(":feature:insights"))
+    implementation(project(":feature:sleep"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

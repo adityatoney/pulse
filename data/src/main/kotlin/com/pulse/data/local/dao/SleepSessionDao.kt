@@ -24,6 +24,9 @@ interface SleepSessionDao {
     @Query("DELETE FROM sleep_sessions")
     suspend fun clear()
 
+    @Query("SELECT * FROM sleep_sessions WHERE startUtcMs BETWEEN :fromMs AND :toMs ORDER BY startUtcMs ASC")
+    fun observeRange(fromMs: Long, toMs: Long): Flow<List<SleepSessionEntity>>
+
     @Query("SELECT * FROM sleep_sessions")
     suspend fun getAll(): List<SleepSessionEntity>
 }

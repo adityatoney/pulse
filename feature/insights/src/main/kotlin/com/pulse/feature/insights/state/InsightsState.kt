@@ -1,7 +1,9 @@
 package com.pulse.feature.insights.state
 
 import com.pulse.domain.model.Insight
+import com.pulse.domain.model.MetricTrend
 import com.pulse.domain.model.MetricType
+import com.pulse.domain.model.WeeklyChallenge
 
 data class InsightsState(
     val dailyInsights: List<Insight> = emptyList(),
@@ -11,6 +13,8 @@ data class InsightsState(
     val heatmapDays: List<HeatmapDay> = emptyList(),
     val heatmapMetric: MetricType = MetricType.Steps,
     val todayPosition: MetricPosition? = null,
+    val trends: List<MetricTrend> = emptyList(),
+    val weeklyChallenges: List<WeeklyChallenge> = emptyList(),
     val loading: Boolean = true,
 )
 

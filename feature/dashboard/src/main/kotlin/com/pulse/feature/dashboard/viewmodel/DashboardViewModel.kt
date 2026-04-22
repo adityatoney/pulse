@@ -10,6 +10,7 @@ import com.pulse.domain.model.Timeframe
 import com.pulse.domain.repository.HealthRepository
 import com.pulse.domain.usecase.CalculateMoMUseCase
 import com.pulse.domain.usecase.CalculateWoWUseCase
+import com.pulse.domain.usecase.ComputeStreakUseCase
 import com.pulse.domain.usecase.GetInsightsUseCase
 import com.pulse.domain.usecase.GetTodaySummaryUseCase
 import com.pulse.domain.usecase.ObserveDeviceStatusUseCase
@@ -40,6 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.datetime.DatePeriod
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.minus
+import kotlinx.datetime.plus
 import javax.inject.Inject
 
 @HiltViewModel
@@ -47,6 +49,7 @@ class DashboardViewModel @Inject constructor(
     private val getToday: GetTodaySummaryUseCase,
     private val calcWoW: CalculateWoWUseCase,
     private val calcMoM: CalculateMoMUseCase,
+    private val computeStreak: ComputeStreakUseCase,
     private val getInsights: GetInsightsUseCase,
     private val observeSync: ObserveSyncStatusUseCase,
     private val observeDevice: ObserveDeviceStatusUseCase,
@@ -102,6 +105,11 @@ class DashboardViewModel @Inject constructor(
             }
         }.launchIn(viewModelScope)
 
+        // Streak doesn't depend on selected date — always anchored to today
+        computeStreak(clock.today()).onEach { streak ->
+            _state.update { it.copy(moveStreak = streak) }
+        }.launchIn(viewModelScope)
+
         wireStreams()
         onIntent(DashboardIntent.Load)
     }
@@ -113,9 +121,16 @@ class DashboardViewModel @Inject constructor(
         dateStreamsJob = viewModelScope.launch {
             val date = _state.value.selectedDate
 
+            // Align WoW anchor to Sunday of the calendar week containing the selected date,
+            // so the comparison matches the Mon-Sun calendar week the user expects.
+            val today = clock.today()
+            val dow = date.dayOfWeek.ordinal // Monday=0
+            val sunday = date.plus(DatePeriod(days = 6 - dow))
+            val wowAnchor = if (sunday > today) today else sunday
+
             combine(
                 getToday(date),
-                calcWoW(MetricType.Steps, date),
+                calcWoW(MetricType.Steps, wowAnchor),
                 calcMoM(MetricType.Steps, date),
             ) { today, wow, mom ->
                 Triple(today, wow, mom)
@@ -145,14 +160,23 @@ class DashboardViewModel @Inject constructor(
                 health.observeDailyAggregate(date, MetricType.RestingHeartRate),
                 health.observeDailyAggregate(date, MetricType.Weight),
                 health.observeDailyAggregate(date, MetricType.SpO2),
-                health.observeDailyAggregate(date, MetricType.HRV),
-            ) { rhr, weight, spo2, hrv ->
+            ) { rhr, weight, spo2 ->
                 _state.update {
                     it.copy(
                         restingHr = rhr.total.takeIf { v -> v > 0 },
                         weight = weight.total.takeIf { v -> v > 0 },
                         spo2 = spo2.total.takeIf { v -> v > 0 },
-                        hrv = hrv.total.takeIf { v -> v > 0 },
+                    )
+                }
+            }.launchIn(this)
+
+            health.observeIntradayHr(date).onEach { samples ->
+                val latest = samples.maxByOrNull { it.timestampMs }
+                _state.update {
+                    it.copy(
+                        intradayHrSamples = samples,
+                        currentHrBpm = latest?.bpm,
+                        lastHrSampleAt = latest?.let { s -> kotlinx.datetime.Instant.fromEpochMilliseconds(s.timestampMs) },
                     )
                 }
             }.launchIn(this)
@@ -207,6 +231,8 @@ class DashboardViewModel @Inject constructor(
                 val label = if (newValue) "Activities only" else "All sources"
                 _effects.trySend(DashboardEffect.ShowSnackbar("Calories: $label"))
             }
+            DashboardIntent.OpenSleepDetail -> _effects.trySend(DashboardEffect.NavigateToSleepDetail)
+            DashboardIntent.OpenHrDetail -> _effects.trySend(DashboardEffect.NavigateToHrDetail)
         }
     }
 
