@@ -269,6 +269,47 @@ class HealthRepositoryImpl @Inject constructor(
         val fromMs = range.start.atStartOfDayMillis()
         val toMs = fromMs + 24 * 60 * 60 * 1000L
         val zone = TimeZone.currentSystemDefault()
+        val dateStr = range.start.toString()
+
+        // For ZoneMinutes, combine exercise sessions with the daily summary total
+        // so non-exercise zone minutes (from all-day HR monitoring) are included.
+        if (metric == MetricType.ZoneMinutes) {
+            return combine(
+                exerciseDao.observeRange(fromMs, toMs),
+                summaryDao.observe(dateStr, MetricType.ZoneMinutes.name),
+            ) { sessions, summaryEntity ->
+                val hourly = DoubleArray(24)
+                for (s in sessions) {
+                    val hour = Instant.fromEpochMilliseconds(s.startUtcMs)
+                        .toLocalDateTime(zone).hour
+                    hourly[hour] += (s.zoneMinutes ?: 0).toDouble()
+                }
+                val exerciseTotal = hourly.sum()
+                val summaryTotal = summaryEntity?.total ?: exerciseTotal
+                val nonExerciseZm = (summaryTotal - exerciseTotal).coerceAtLeast(0.0)
+                // Distribute non-exercise zone minutes across hours that had exercise,
+                // or if none, add to the latest hour with data from summary
+                if (nonExerciseZm > 0) {
+                    val activeHours = hourly.indices.filter { hourly[it] > 0 }
+                    if (activeHours.isNotEmpty()) {
+                        val share = nonExerciseZm / activeHours.size
+                        for (h in activeHours) hourly[h] += share
+                    } else {
+                        // No exercise sessions — put all zone minutes at noon as a placeholder
+                        hourly[12] += nonExerciseZm
+                    }
+                }
+                val points = hourly.mapIndexed { h, value ->
+                    SeriesPoint(
+                        bucketStart = Instant.fromEpochMilliseconds(fromMs + h * 3_600_000L),
+                        value = value,
+                        goal = null,
+                    )
+                }
+                MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
+            }
+        }
+
         return exerciseDao.observeRange(fromMs, toMs).map { sessions ->
             val hourly = DoubleArray(24)
             for (s in sessions) {

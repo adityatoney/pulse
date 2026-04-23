@@ -1,6 +1,7 @@
 package com.pulse.data.health
 
 import android.content.Context
+import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.aggregate.AggregationResult
@@ -491,8 +492,9 @@ class HealthConnectDataSource @Inject constructor(
         val meters = res[DistanceRecord.DISTANCE_TOTAL]?.inMeters ?: 0.0
         val activeCal = res[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories ?: 0.0
         val totalCal = res[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories ?: 0.0
-        // Prefer active calories; fall back to total if active is 0
-        val kcal = if (activeCal > 0) activeCal else totalCal
+        // Prefer total calories (matches HC/Google Fit display); fall back to active
+        val kcal = if (totalCal > 0) totalCal else activeCal
+        Log.d("Health", "aggregateForTimeRange: totalCal=$totalCal, activeCal=$activeCal, chosen=$kcal")
         val steps = res[StepsRecord.COUNT_TOTAL] ?: 0L
         return ExerciseAggregates(meters = meters, kcal = kcal, steps = steps)
     }

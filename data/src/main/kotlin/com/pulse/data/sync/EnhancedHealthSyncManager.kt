@@ -414,6 +414,7 @@ class EnhancedHealthSyncManager @Inject constructor(
                 val typeName = exerciseTypeName(rec.exerciseType)
                 val agg = hc.aggregateForTimeRange(rec.startTime, rec.endTime)
                 val durationMs = rec.endTime.toEpochMilli() - rec.startTime.toEpochMilli()
+                val durationHours = durationMs / 3_600_000.0
                 val avgPace = if (agg.meters > 0) {
                     ((durationMs / 1000.0) / (agg.meters / METERS_PER_MILE)).toInt()
                 } else null
@@ -427,7 +428,7 @@ class EnhancedHealthSyncManager @Inject constructor(
                 val avgHr = if (sessionHr.isNotEmpty()) sessionHr.map { it.second }.average().toInt() else null
                 val maxHr = if (sessionHr.isNotEmpty()) sessionHr.maxOf { it.second } else null
 
-                val sessionZoneMin = if (sessionHr.isNotEmpty()) {
+                val hrBasedZoneMin = if (sessionHr.isNotEmpty()) {
                     val sessionDay = rec.startTime.atZone(zone).toLocalDate()
                     val restingHr = restingHrCache.getOrPut(sessionDay) {
                         hc.restingHeartRate(sessionDay, zone) ?: 65
@@ -441,13 +442,35 @@ class EnhancedHealthSyncManager @Inject constructor(
                     ZoneMinuteCalculator.calculate(zmSamples, restingHr, age = 45).total
                 } else null
 
+                // Fall back to duration for active exercises with no/zero HR-based zone minutes
+                // (common for manual entries where passive HR readings don't reach zone thresholds)
+                val sessionZoneMin = if ((hrBasedZoneMin == null || hrBasedZoneMin == 0) && isActiveExerciseType(rec.exerciseType)) {
+                    val durMin = (durationMs / 60_000).toInt()
+                    Log.d(TAG, "Using duration ${durMin}m as zone minutes for ${rec.title ?: typeName} (HR-based was $hrBasedZoneMin)")
+                    durMin
+                } else hrBasedZoneMin
+
+                // If HC aggregate calories are too low (< 1 cal/min), estimate via MET.
+                // Google Fit calculates "Energy expended" internally for manual entries
+                // but doesn't write it to HC as a calorie record.
+                val minExpectedCalPerMin = 1.0
+                val sessionMinutes = durationMs / 60_000.0
+                val hcCaloriesTooLow = agg.kcal < sessionMinutes * minExpectedCalPerMin
+                val calories = if (hcCaloriesTooLow && durationHours > 0) {
+                    val estimated = estimateCalories(rec.exerciseType, durationHours, agg.meters)
+                    Log.d(TAG, "HC cal too low (${agg.kcal}), estimating: $estimated for ${rec.title ?: typeName}")
+                    estimated
+                } else {
+                    agg.kcal
+                }
+
                 ExerciseSessionEntity(
                     id = rec.metadata.id,
                     type = rec.title ?: typeName,
                     startUtcMs = rec.startTime.toEpochMilli(),
                     endUtcMs = rec.endTime.toEpochMilli(),
                     distanceMeters = agg.meters,
-                    calories = agg.kcal,
+                    calories = calories,
                     steps = agg.steps.toInt().takeIf { it > 0 },
                     avgHr = avgHr, maxHr = maxHr,
                     avgPaceSecondsPerMile = avgPace,
@@ -475,9 +498,36 @@ class EnhancedHealthSyncManager @Inject constructor(
                 }
         }
 
-        for ((dateStr, _) in sessionsByDay) {
+        for ((dateStr, daySessions) in sessionsByDay) {
             dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.Distance.name, enqueuedAtMs = nowMs)
             dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.ActiveCalories.name, enqueuedAtMs = nowMs)
+
+            // For exercises that got duration-based zone minutes (manual entries or
+            // sessions where passive HR didn't reach zone thresholds), add them to
+            // the daily zone minutes aggregate so the dashboard reflects them.
+            // Detect these by checking if zone minutes equals the session duration.
+            val manualZoneMin = daySessions
+                .filter { session ->
+                    val zm = session.zoneMinutes ?: 0
+                    val durMin = ((session.endUtcMs - session.startUtcMs) / 60_000).toInt()
+                    zm > 0 && zm == durMin // duration-based fallback was used
+                }
+                .sumOf { it.zoneMinutes ?: 0 }
+            if (manualZoneMin > 0) {
+                // Read existing HR-based zone minutes for this day
+                val existing = rawDailyDao.getForDateAndMetric(dateStr, MetricType.ZoneMinutes.name)
+                val hrBasedZm = existing.firstOrNull()?.value ?: 0.0
+                val combined = hrBasedZm + manualZoneMin
+                rawDailyDao.insertAll(listOf(
+                    RawDailyMetricEntity(
+                        date = dateStr, metric = MetricType.ZoneMinutes.name,
+                        source = "HealthConnect", value = combined, unit = "minutes",
+                        externalId = "hc-zoneminutes-$dateStr", ingestedAtMs = nowMs,
+                    )
+                ))
+                dirtyEntries += ComputeQueueEntity(date = dateStr, metric = MetricType.ZoneMinutes.name, enqueuedAtMs = nowMs)
+                Log.d(TAG, "Zone min for $dateStr: HR-based=$hrBasedZm + manual=$manualZoneMin = $combined")
+            }
         }
         if (dirtyEntries.isNotEmpty()) computeQueueDao.enqueue(dirtyEntries)
     }
@@ -527,7 +577,94 @@ class EnhancedHealthSyncManager @Inject constructor(
         syncStateDao.remove(CHANGES_TOKEN_KEY)
     }
 
+    // --- Calorie Estimation (MET-based) ----------------------------------------
+
+    /**
+     * Estimate calories when HC doesn't provide reliable calorie data
+     * (common for manually entered exercises in Google Fit).
+     * Uses MET values × default body weight × duration.
+     * Default weight 80 kg matches Google Fit's mid-range assumption.
+     */
+    private fun estimateCalories(
+        exerciseType: Int,
+        durationHours: Double,
+        distanceMeters: Double,
+    ): Double {
+        val ESR = androidx.health.connect.client.records.ExerciseSessionRecord
+        val defaultWeightKg = 80.0
+
+        // MET values from Compendium of Physical Activities
+        val met = when (exerciseType) {
+            ESR.EXERCISE_TYPE_WALKING -> {
+                // Adjust MET by walking speed if distance is available
+                if (distanceMeters > 0 && durationHours > 0) {
+                    val mph = (distanceMeters / METERS_PER_MILE) / durationHours
+                    when {
+                        mph < 2.5 -> 2.8
+                        mph < 3.0 -> 3.0
+                        mph < 3.5 -> 3.3
+                        mph < 4.0 -> 3.6
+                        mph < 4.5 -> 4.3
+                        else -> 5.0
+                    }
+                } else 3.3
+            }
+            ESR.EXERCISE_TYPE_RUNNING -> {
+                if (distanceMeters > 0 && durationHours > 0) {
+                    val mph = (distanceMeters / METERS_PER_MILE) / durationHours
+                    when {
+                        mph < 5.0 -> 8.3
+                        mph < 6.0 -> 9.8
+                        mph < 7.0 -> 11.0
+                        mph < 8.0 -> 11.8
+                        else -> 12.8
+                    }
+                } else 9.8
+            }
+            ESR.EXERCISE_TYPE_BIKING -> {
+                if (distanceMeters > 0 && durationHours > 0) {
+                    val mph = (distanceMeters / METERS_PER_MILE) / durationHours
+                    when {
+                        mph < 10.0 -> 4.0
+                        mph < 12.0 -> 6.8
+                        mph < 14.0 -> 8.0
+                        mph < 16.0 -> 10.0
+                        else -> 12.0
+                    }
+                } else 7.5
+            }
+            ESR.EXERCISE_TYPE_HIKING -> 6.0
+            ESR.EXERCISE_TYPE_SWIMMING_POOL,
+            ESR.EXERCISE_TYPE_SWIMMING_OPEN_WATER -> 7.0
+            ESR.EXERCISE_TYPE_YOGA -> 3.0
+            ESR.EXERCISE_TYPE_WEIGHTLIFTING,
+            ESR.EXERCISE_TYPE_STRENGTH_TRAINING -> 5.0
+            ESR.EXERCISE_TYPE_ELLIPTICAL -> 5.0
+            ESR.EXERCISE_TYPE_STAIR_CLIMBING -> 9.0
+            ESR.EXERCISE_TYPE_ROWING -> 7.0
+            else -> 5.0 // moderate activity default
+        }
+
+        return met * defaultWeightKg * durationHours
+    }
+
     // --- Helpers ---------------------------------------------------------------
+
+    private fun isActiveExerciseType(type: Int): Boolean {
+        val ESR = androidx.health.connect.client.records.ExerciseSessionRecord
+        return type in setOf(
+            ESR.EXERCISE_TYPE_WALKING,
+            ESR.EXERCISE_TYPE_RUNNING,
+            ESR.EXERCISE_TYPE_BIKING,
+            ESR.EXERCISE_TYPE_HIKING,
+            ESR.EXERCISE_TYPE_SWIMMING_POOL,
+            ESR.EXERCISE_TYPE_SWIMMING_OPEN_WATER,
+            ESR.EXERCISE_TYPE_ELLIPTICAL,
+            ESR.EXERCISE_TYPE_STAIR_CLIMBING,
+            ESR.EXERCISE_TYPE_ROWING,
+            ESR.EXERCISE_TYPE_OTHER_WORKOUT,
+        )
+    }
 
     private fun exerciseTypeName(type: Int): String = when (type) {
         androidx.health.connect.client.records.ExerciseSessionRecord.EXERCISE_TYPE_RUNNING -> "Running"
