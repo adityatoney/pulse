@@ -20,6 +20,8 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Calendar
+import java.util.TimeZone
 
 data class HrChartPoint(
     val timestampMs: Long,
@@ -94,15 +96,23 @@ fun IntradayHrChart(
             style = Fill,
         )
 
-        // Time labels — shown in both compact and full modes
-        val tickInterval = if (compact) 3_600_000L * 4 else 3_600_000L * 4
-        val startHour = (minTs / tickInterval) * tickInterval
-        var tick = startHour
+        // Time labels — shown in both compact and full modes (local timezone)
+        val cal = Calendar.getInstance(TimeZone.getDefault())
+        // Find the first 4-hour boundary in local time at or before minTs
+        cal.timeInMillis = minTs
+        val localHour0 = cal.get(Calendar.HOUR_OF_DAY)
+        val firstTickHour = (localHour0 / 4) * 4
+        cal.set(Calendar.HOUR_OF_DAY, firstTickHour)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        var tick = cal.timeInMillis
         val style = if (compact) compactLabelStyle else labelStyle
         while (tick <= maxTs) {
             val x = toX(tick)
             if (x >= leftPad + 10.dp.toPx() && x <= size.width - 20.dp.toPx()) {
-                val hour = ((tick / 3_600_000L) % 24).toInt()
+                cal.timeInMillis = tick
+                val hour = cal.get(Calendar.HOUR_OF_DAY)
                 val label = when {
                     hour == 0 -> "12a"
                     hour < 12 -> if (compact) "${hour}a" else "$hour AM"
@@ -112,7 +122,7 @@ fun IntradayHrChart(
                 val measured = textMeasurer.measure(label, style)
                 drawText(measured, topLeft = Offset(x - measured.size.width / 2f, topPad + chartH + 3.dp.toPx()))
             }
-            tick += tickInterval
+            tick += 3_600_000L * 4
         }
 
         if (!compact) {
