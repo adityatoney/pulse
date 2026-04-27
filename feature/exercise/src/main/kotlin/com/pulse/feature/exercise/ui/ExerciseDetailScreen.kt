@@ -27,20 +27,24 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.DirectionsRun
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.LocalFireDepartment
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Straighten
 import androidx.compose.material.icons.outlined.Terrain
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.automirrored.outlined.TrendingUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -60,7 +64,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -103,6 +109,7 @@ import com.pulse.domain.model.ExerciseDetail
 import com.pulse.domain.model.ExerciseLap
 import com.pulse.domain.model.HrSample
 import com.pulse.domain.model.RoutePoint
+import com.pulse.feature.exercise.state.EditField
 import com.pulse.feature.exercise.state.ExerciseDetailEffect
 import com.pulse.feature.exercise.state.ExerciseDetailIntent
 import com.pulse.feature.exercise.state.ExerciseDetailState
@@ -164,6 +171,7 @@ fun ExerciseDetailRoute(
     ExerciseDetailScreen(
         state = state,
         onBack = onBack,
+        onIntent = viewModel::onIntent,
         onRequestRouteConsent = { viewModel.onIntent(ExerciseDetailIntent.RequestRouteConsent) },
     )
 }
@@ -173,6 +181,7 @@ fun ExerciseDetailRoute(
 fun ExerciseDetailScreen(
     state: ExerciseDetailState,
     onBack: () -> Unit,
+    onIntent: (ExerciseDetailIntent) -> Unit = {},
     onRequestRouteConsent: () -> Unit = {},
 ) {
     Scaffold(
@@ -182,6 +191,13 @@ fun ExerciseDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (state.detail != null) {
+                        IconButton(onClick = { onIntent(ExerciseDetailIntent.OpenEdit) }) {
+                            Icon(Icons.Outlined.Edit, contentDescription = "Edit")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -206,6 +222,19 @@ fun ExerciseDetailScreen(
                 onRequestRouteConsent = onRequestRouteConsent,
             )
         }
+    }
+
+    if (state.showEditDialog) {
+        EditExerciseDialog(
+            calories = state.editCalories,
+            distance = state.editDistance,
+            steps = state.editSteps,
+            onCaloriesChange = { onIntent(ExerciseDetailIntent.UpdateEditField(EditField.Calories, it)) },
+            onDistanceChange = { onIntent(ExerciseDetailIntent.UpdateEditField(EditField.Distance, it)) },
+            onStepsChange = { onIntent(ExerciseDetailIntent.UpdateEditField(EditField.Steps, it)) },
+            onSave = { onIntent(ExerciseDetailIntent.SaveEdit) },
+            onDismiss = { onIntent(ExerciseDetailIntent.DismissEdit) },
+        )
     }
 }
 
@@ -1178,4 +1207,55 @@ private fun LapRow(lap: ExerciseLap) {
             )
         }
     }
+}
+
+@Composable
+private fun EditExerciseDialog(
+    calories: String,
+    distance: String,
+    steps: String,
+    onCaloriesChange: (String) -> Unit,
+    onDistanceChange: (String) -> Unit,
+    onStepsChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Exercise") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = calories,
+                    onValueChange = onCaloriesChange,
+                    label = { Text("Calories (cal)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = distance,
+                    onValueChange = onDistanceChange,
+                    label = { Text("Distance (mi)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = steps,
+                    onValueChange = onStepsChange,
+                    label = { Text("Steps") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onSave) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }

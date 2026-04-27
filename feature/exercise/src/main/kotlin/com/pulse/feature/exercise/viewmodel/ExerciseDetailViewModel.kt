@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pulse.domain.model.RoutePoint
 import com.pulse.domain.repository.HealthRepository
+import com.pulse.feature.exercise.state.EditField
 import com.pulse.feature.exercise.state.ExerciseDetailEffect
 import com.pulse.feature.exercise.state.ExerciseDetailIntent
 import com.pulse.feature.exercise.state.ExerciseDetailState
@@ -44,6 +45,47 @@ class ExerciseDetailViewModel @Inject constructor(
             ExerciseDetailIntent.RequestRouteConsent ->
                 _effects.trySend(ExerciseDetailEffect.LaunchRouteConsent(sessionId))
             is ExerciseDetailIntent.RouteConsentResult -> onRouteConsentResult(intent)
+            ExerciseDetailIntent.OpenEdit -> openEdit()
+            ExerciseDetailIntent.DismissEdit -> _state.update { it.copy(showEditDialog = false) }
+            is ExerciseDetailIntent.UpdateEditField -> updateEditField(intent.field, intent.value)
+            ExerciseDetailIntent.SaveEdit -> saveEdit()
+        }
+    }
+
+    private fun openEdit() {
+        val detail = _state.value.detail ?: return
+        val distMi = detail.session.distanceMeters?.let { it / 1_609.34 }
+        _state.update {
+            it.copy(
+                showEditDialog = true,
+                editCalories = detail.session.calories?.let { c -> "%.0f".format(c) } ?: "",
+                editDistance = distMi?.let { d -> "%.2f".format(d) } ?: "",
+                editSteps = detail.steps?.toString() ?: "",
+            )
+        }
+    }
+
+    private fun updateEditField(field: EditField, value: String) {
+        _state.update {
+            when (field) {
+                EditField.Calories -> it.copy(editCalories = value)
+                EditField.Distance -> it.copy(editDistance = value)
+                EditField.Steps -> it.copy(editSteps = value)
+            }
+        }
+    }
+
+    private fun saveEdit() {
+        val s = _state.value
+        val calories = s.editCalories.toDoubleOrNull() ?: return
+        val distMi = s.editDistance.toDoubleOrNull()
+        val distMeters = distMi?.let { it * 1_609.34 }
+        val steps = s.editSteps.toIntOrNull()
+
+        viewModelScope.launch {
+            health.updateExerciseMetrics(sessionId, calories, distMeters, steps)
+            _state.update { it.copy(showEditDialog = false) }
+            load() // reload to show updated values
         }
     }
 

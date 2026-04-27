@@ -458,6 +458,29 @@ class HealthRepositoryImpl @Inject constructor(
         routePointDao.insertAll(entities)
     }
 
+    override suspend fun updateExerciseMetrics(
+        sessionId: String,
+        calories: Double,
+        distanceMeters: Double?,
+        steps: Int?,
+    ) {
+        exerciseDao.updateMetrics(sessionId, calories, distanceMeters, steps)
+
+        // Recompute daily summaries for the exercise's date
+        val entity = exerciseDao.findById(sessionId) ?: return
+        val dateStr = Instant.fromEpochMilliseconds(entity.startUtcMs)
+            .toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+        val nowMs = clock.now().toEpochMilliseconds()
+        val dirtyMetrics = listOf(
+            MetricType.Calories, MetricType.ActiveCalories,
+            MetricType.Distance,
+        )
+        computeQueueDao.enqueue(dirtyMetrics.map { m ->
+            ComputeQueueEntity(date = dateStr, metric = m.name, enqueuedAtMs = nowMs)
+        })
+        computeEngine.processQueue()
+    }
+
     override fun observeSleep(date: LocalDate): Flow<SleepSummary?> {
         val noonPrevMs = date.atStartOfDayMillis() - 12 * 60 * 60 * 1000L
         val noonMs = date.atStartOfDayMillis() + 12 * 60 * 60 * 1000L

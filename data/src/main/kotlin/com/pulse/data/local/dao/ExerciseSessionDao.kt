@@ -49,6 +49,12 @@ interface ExerciseSessionDao {
     @Query("UPDATE exercise_sessions SET zoneMinutes = :zoneMinutes WHERE id = :id")
     suspend fun updateZoneMinutes(id: String, zoneMinutes: Int)
 
+    @Query("UPDATE exercise_sessions SET calories = :calories, distanceMeters = :distanceMeters, steps = :steps, userEdited = 1 WHERE id = :id")
+    suspend fun updateMetrics(id: String, calories: Double, distanceMeters: Double?, steps: Int?)
+
+    @Query("SELECT id FROM exercise_sessions WHERE userEdited = 1")
+    suspend fun getUserEditedIds(): List<String>
+
     @Query("SELECT COUNT(DISTINCT date(startUtcMs/1000, 'unixepoch', 'localtime')) FROM exercise_sessions WHERE startUtcMs BETWEEN :fromMs AND :toMs")
     suspend fun exerciseDayCount(fromMs: Long, toMs: Long): Int
 

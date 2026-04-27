@@ -233,6 +233,7 @@ class EnhancedHealthSyncManager @Inject constructor(
         val dirtyEntries = mutableListOf<ComputeQueueEntity>()
 
         val steps = hc.stepsByDay(start, end, zone)
+        Log.d(TAG, "HC stepsByDay returned ${steps.size} days: ${steps.map { "${it.key}=${it.value}" }.joinToString()}")
         steps.forEach { (day, count) ->
             val dateStr = day.toString()
             rawRows += RawDailyMetricEntity(
@@ -413,6 +414,7 @@ class EnhancedHealthSyncManager @Inject constructor(
             try {
                 val typeName = exerciseTypeName(rec.exerciseType)
                 val agg = hc.aggregateForTimeRange(rec.startTime, rec.endTime)
+                Log.d(TAG, "Exercise ${rec.title ?: typeName}: HC agg steps=${agg.steps} kcal=${agg.kcal} meters=${agg.meters}")
                 val durationMs = rec.endTime.toEpochMilli() - rec.startTime.toEpochMilli()
                 val durationHours = durationMs / 3_600_000.0
                 val avgPace = if (agg.meters > 0) {
@@ -442,23 +444,25 @@ class EnhancedHealthSyncManager @Inject constructor(
                     ZoneMinuteCalculator.calculate(zmSamples, restingHr, age = 45).total
                 } else null
 
-                // Fall back to duration for active exercises with no/zero HR-based zone minutes
-                // (common for manual entries where passive HR readings don't reach zone thresholds)
-                val sessionZoneMin = if ((hrBasedZoneMin == null || hrBasedZoneMin == 0) && isActiveExerciseType(rec.exerciseType)) {
+                // Fall back to duration when HR-based zone minutes are 0 or unavailable.
+                // Any recorded exercise implies the user was active — passive HR readings
+                // during manual entries often don't reach zone thresholds, so duration is
+                // a better approximation than 0.
+                // Only exclude sedentary types (yoga, stretching) from the duration fallback.
+                Log.d(TAG, "Zone calc: ${rec.title ?: typeName} exerciseType=${rec.exerciseType} hrBased=$hrBasedZoneMin hrSamples=${sessionHr.size}")
+                val isSedentaryType = isSedentaryExerciseType(rec.exerciseType)
+                val sessionZoneMin = if ((hrBasedZoneMin == null || hrBasedZoneMin == 0) && !isSedentaryType) {
                     val durMin = (durationMs / 60_000).toInt()
                     Log.d(TAG, "Using duration ${durMin}m as zone minutes for ${rec.title ?: typeName} (HR-based was $hrBasedZoneMin)")
                     durMin
                 } else hrBasedZoneMin
 
-                // If HC aggregate calories are too low (< 1 cal/min), estimate via MET.
-                // Google Fit calculates "Energy expended" internally for manual entries
-                // but doesn't write it to HC as a calorie record.
-                val minExpectedCalPerMin = 1.0
+                // Use HC calories directly when available. Fall back to MET estimation
+                // only when HC has no meaningful data (no watch worn → 0 or near-0 calories).
                 val sessionMinutes = durationMs / 60_000.0
-                val hcCaloriesTooLow = agg.kcal < sessionMinutes * minExpectedCalPerMin
-                val calories = if (hcCaloriesTooLow && durationHours > 0) {
-                    val estimated = estimateCalories(rec.exerciseType, durationHours, agg.meters)
-                    Log.d(TAG, "HC cal too low (${agg.kcal}), estimating: $estimated for ${rec.title ?: typeName}")
+                val calories = if (agg.kcal < 1.0 && durationHours > 0) {
+                    val estimated = estimateCalories(rec.exerciseType, durationHours, agg.meters, rec.title)
+                    Log.d(TAG, "HC cal ~0, using MET fallback ($estimated) for ${rec.title ?: typeName}")
                     estimated
                 } else {
                     agg.kcal
@@ -484,7 +488,10 @@ class EnhancedHealthSyncManager @Inject constructor(
                 null
             }
         }
-        exerciseDao.upsert(exerciseEntities)
+        // Preserve user-edited exercises — don't overwrite with HC data
+        val editedIds = exerciseDao.getUserEditedIds().toSet()
+        val toUpsert = exerciseEntities.filter { it.id !in editedIds }
+        exerciseDao.upsert(toUpsert)
         exerciseDao.deduplicateOverlapping()
 
         // Enqueue Distance and ActiveCalories for compute engine
@@ -577,47 +584,46 @@ class EnhancedHealthSyncManager @Inject constructor(
         syncStateDao.remove(CHANGES_TOKEN_KEY)
     }
 
-    // --- Calorie Estimation (MET-based) ----------------------------------------
+    // --- Calorie Estimation (MET-based, fallback only) -------------------------
 
     /**
-     * Estimate calories when HC doesn't provide reliable calorie data
-     * (common for manually entered exercises in Google Fit).
-     * Uses MET values × default body weight × duration.
-     * Default weight 80 kg matches Google Fit's mid-range assumption.
+     * Estimate calories when HC has no data (no watch worn).
+     * Uses MET × body weight × duration. Only called when HC calories ≈ 0.
      */
     private fun estimateCalories(
         exerciseType: Int,
         durationHours: Double,
         distanceMeters: Double,
+        title: String? = null,
     ): Double {
         val ESR = androidx.health.connect.client.records.ExerciseSessionRecord
-        val defaultWeightKg = 80.0
+        val weightKg = 60.3 // 133 lbs
 
-        // MET values from Compendium of Physical Activities
-        val met = when (exerciseType) {
+        // Override exercise type based on title when HC misclassifies
+        val effectiveType = when {
+            title != null && title.contains("walk", ignoreCase = true) -> ESR.EXERCISE_TYPE_WALKING
+            title != null && title.contains("run", ignoreCase = true) -> ESR.EXERCISE_TYPE_RUNNING
+            title != null && title.contains("cycling", ignoreCase = true) -> ESR.EXERCISE_TYPE_BIKING
+            title != null && title.contains("hik", ignoreCase = true) -> ESR.EXERCISE_TYPE_HIKING
+            else -> exerciseType
+        }
+
+        val met = when (effectiveType) {
             ESR.EXERCISE_TYPE_WALKING -> {
-                // Adjust MET by walking speed if distance is available
                 if (distanceMeters > 0 && durationHours > 0) {
                     val mph = (distanceMeters / METERS_PER_MILE) / durationHours
                     when {
-                        mph < 2.5 -> 2.8
-                        mph < 3.0 -> 3.0
-                        mph < 3.5 -> 3.3
-                        mph < 4.0 -> 3.6
-                        mph < 4.5 -> 4.3
-                        else -> 5.0
+                        mph < 2.5 -> 2.8; mph < 3.0 -> 3.0; mph < 3.5 -> 3.3
+                        mph < 4.0 -> 3.6; mph < 4.5 -> 4.3; else -> 5.0
                     }
                 } else 3.3
             }
-            ESR.EXERCISE_TYPE_RUNNING -> {
+            ESR.EXERCISE_TYPE_RUNNING, ESR.EXERCISE_TYPE_RUNNING_TREADMILL -> {
                 if (distanceMeters > 0 && durationHours > 0) {
                     val mph = (distanceMeters / METERS_PER_MILE) / durationHours
                     when {
-                        mph < 5.0 -> 8.3
-                        mph < 6.0 -> 9.8
-                        mph < 7.0 -> 11.0
-                        mph < 8.0 -> 11.8
-                        else -> 12.8
+                        mph < 5.0 -> 8.3; mph < 6.0 -> 9.8; mph < 7.0 -> 11.0
+                        mph < 8.0 -> 11.8; else -> 12.8
                     }
                 } else 9.8
             }
@@ -625,44 +631,32 @@ class EnhancedHealthSyncManager @Inject constructor(
                 if (distanceMeters > 0 && durationHours > 0) {
                     val mph = (distanceMeters / METERS_PER_MILE) / durationHours
                     when {
-                        mph < 10.0 -> 4.0
-                        mph < 12.0 -> 6.8
-                        mph < 14.0 -> 8.0
-                        mph < 16.0 -> 10.0
-                        else -> 12.0
+                        mph < 10.0 -> 4.0; mph < 12.0 -> 6.8; mph < 14.0 -> 8.0
+                        mph < 16.0 -> 10.0; else -> 12.0
                     }
                 } else 7.5
             }
             ESR.EXERCISE_TYPE_HIKING -> 6.0
-            ESR.EXERCISE_TYPE_SWIMMING_POOL,
-            ESR.EXERCISE_TYPE_SWIMMING_OPEN_WATER -> 7.0
+            ESR.EXERCISE_TYPE_SWIMMING_POOL, ESR.EXERCISE_TYPE_SWIMMING_OPEN_WATER -> 7.0
             ESR.EXERCISE_TYPE_YOGA -> 3.0
-            ESR.EXERCISE_TYPE_WEIGHTLIFTING,
-            ESR.EXERCISE_TYPE_STRENGTH_TRAINING -> 5.0
+            ESR.EXERCISE_TYPE_WEIGHTLIFTING, ESR.EXERCISE_TYPE_STRENGTH_TRAINING -> 5.0
             ESR.EXERCISE_TYPE_ELLIPTICAL -> 5.0
-            ESR.EXERCISE_TYPE_STAIR_CLIMBING -> 9.0
-            ESR.EXERCISE_TYPE_ROWING -> 7.0
-            else -> 5.0 // moderate activity default
+            ESR.EXERCISE_TYPE_STAIR_CLIMBING, ESR.EXERCISE_TYPE_STAIR_CLIMBING_MACHINE -> 9.0
+            ESR.EXERCISE_TYPE_ROWING, ESR.EXERCISE_TYPE_ROWING_MACHINE -> 7.0
+            else -> 5.0
         }
 
-        return met * defaultWeightKg * durationHours
+        return met * weightKg * durationHours
     }
 
     // --- Helpers ---------------------------------------------------------------
 
-    private fun isActiveExerciseType(type: Int): Boolean {
+    private fun isSedentaryExerciseType(type: Int): Boolean {
         val ESR = androidx.health.connect.client.records.ExerciseSessionRecord
         return type in setOf(
-            ESR.EXERCISE_TYPE_WALKING,
-            ESR.EXERCISE_TYPE_RUNNING,
-            ESR.EXERCISE_TYPE_BIKING,
-            ESR.EXERCISE_TYPE_HIKING,
-            ESR.EXERCISE_TYPE_SWIMMING_POOL,
-            ESR.EXERCISE_TYPE_SWIMMING_OPEN_WATER,
-            ESR.EXERCISE_TYPE_ELLIPTICAL,
-            ESR.EXERCISE_TYPE_STAIR_CLIMBING,
-            ESR.EXERCISE_TYPE_ROWING,
-            ESR.EXERCISE_TYPE_OTHER_WORKOUT,
+            ESR.EXERCISE_TYPE_YOGA,
+            ESR.EXERCISE_TYPE_STRETCHING,
+            ESR.EXERCISE_TYPE_PILATES,
         )
     }
 

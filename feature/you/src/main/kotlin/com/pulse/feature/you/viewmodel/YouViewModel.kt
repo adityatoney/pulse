@@ -230,6 +230,11 @@ class YouViewModel @Inject constructor(
             }
 
             // ── Display Preferences ──
+            is YouIntent.SetActivityOnlySteps -> {
+                viewModelScope.launch {
+                    prefsRepo.setActivityOnlySteps(intent.enabled)
+                }
+            }
             is YouIntent.SetActivityOnlyDistance -> {
                 viewModelScope.launch {
                     prefsRepo.setActivityOnlyDistance(intent.enabled)
@@ -312,6 +317,7 @@ class YouViewModel @Inject constructor(
             prefsRepo.observeMetricDisplay().collect { prefs ->
                 _state.update {
                     it.copy(
+                        activityOnlySteps = prefs.activityOnlySteps,
                         activityOnlyDistance = prefs.activityOnlyDistance,
                         activityOnlyCalories = prefs.activityOnlyCalories,
                     )

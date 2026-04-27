@@ -21,4 +21,5 @@ data class ExerciseSessionEntity(
     val zoneMinutes: Int? = null,
     val sourceJson: String?,
     val dirty: Boolean = true,
+    val userEdited: Boolean = false,
 )

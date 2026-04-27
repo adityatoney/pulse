@@ -58,6 +58,7 @@ data class YouState(
     val useDynamicColor: Boolean = false,
 
     // Display preferences
+    val activityOnlySteps: Boolean = false,
     val activityOnlyDistance: Boolean = false,
     val activityOnlyCalories: Boolean = false,
 
@@ -88,6 +89,7 @@ sealed interface YouIntent {
     data object BackupNow : YouIntent
     data object RestoreNow : YouIntent
     data object DismissBackupMessage : YouIntent
+    data class SetActivityOnlySteps(val enabled: Boolean) : YouIntent
     data class SetActivityOnlyDistance(val enabled: Boolean) : YouIntent
     data class SetActivityOnlyCalories(val enabled: Boolean) : YouIntent
     data class SetDarkMode(val enabled: Boolean) : YouIntent

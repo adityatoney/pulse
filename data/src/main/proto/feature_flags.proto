@@ -24,4 +24,5 @@ message Preferences {
     string drive_backup_file_id = 8;
     bool activity_only_distance = 9;
     bool activity_only_calories = 10;
+    bool activity_only_steps = 11;
 }

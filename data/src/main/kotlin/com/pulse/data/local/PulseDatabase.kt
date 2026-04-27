@@ -47,7 +47,7 @@ import com.pulse.data.local.entity.SyncStateEntity
         RawHourlyMetricEntity::class,
         InsightEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class PulseDatabase : RoomDatabase() {
@@ -67,7 +67,7 @@ abstract class PulseDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "pulse.db"
-        const val VERSION = 8
+        const val VERSION = 9
 
         /** v2 → v3: Add exercise HR samples, laps, and extra columns on exercise_sessions. */
         val MIGRATION_2_3 = object : Migration(2, 3) {
@@ -258,6 +258,13 @@ abstract class PulseDatabase : RoomDatabase() {
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE summary_daily_metrics ADD COLUMN activityTotal REAL DEFAULT NULL")
+            }
+        }
+
+        /** v8 → v9: Add userEdited flag to exercise_sessions for protecting manual edits from sync. */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE exercise_sessions ADD COLUMN userEdited INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

@@ -50,6 +50,9 @@ interface HealthRepository {
     /** Save route points obtained from the route-consent UI flow. */
     suspend fun saveRoutePoints(sessionId: String, points: List<RoutePoint>)
 
+    /** Update user-editable exercise metrics (calories, distance, steps). */
+    suspend fun updateExerciseMetrics(sessionId: String, calories: Double, distanceMeters: Double?, steps: Int?)
+
     /** Raw records for the Debug Menu record-dump screen. */
     suspend fun dumpRawRecords(date: LocalDate): List<HealthMetric>
 }

@@ -11,6 +11,7 @@ import javax.inject.Singleton
 data class MetricDisplayPrefs(
     val activityOnlyDistance: Boolean = false,
     val activityOnlyCalories: Boolean = false,
+    val activityOnlySteps: Boolean = false,
 )
 
 @Singleton
@@ -22,6 +23,7 @@ class PreferencesRepository @Inject constructor(
             MetricDisplayPrefs(
                 activityOnlyDistance = it.activityOnlyDistance,
                 activityOnlyCalories = it.activityOnlyCalories,
+                activityOnlySteps = it.activityOnlySteps,
             )
         }
 
@@ -34,5 +36,9 @@ class PreferencesRepository @Inject constructor(
 
     suspend fun setActivityOnlyCalories(value: Boolean) {
         store.updateData { it.toBuilder().setActivityOnlyCalories(value).build() }
+    }
+
+    suspend fun setActivityOnlySteps(value: Boolean) {
+        store.updateData { it.toBuilder().setActivityOnlySteps(value).build() }
     }
 }

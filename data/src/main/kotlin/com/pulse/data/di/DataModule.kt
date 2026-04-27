@@ -74,6 +74,7 @@ object DataProvidersModule {
                 PulseDatabase.MIGRATION_5_6,
                 PulseDatabase.MIGRATION_6_7,
                 PulseDatabase.MIGRATION_7_8,
+                PulseDatabase.MIGRATION_8_9,
             )
             .fallbackToDestructiveMigration()
             .build()
