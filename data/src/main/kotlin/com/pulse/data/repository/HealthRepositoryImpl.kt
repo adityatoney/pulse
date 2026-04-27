@@ -177,7 +177,9 @@ class HealthRepositoryImpl @Inject constructor(
         return combine(
             summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString()),
             prefsRepo.observeMetricDisplay(),
-        ) { rows, prefs ->
+            goalDao.observeAll(),
+        ) { rows, prefs, goals ->
+            val liveGoal = goals.find { it.metric == metric.name }?.target ?: defaultGoal(metric)
             val rowMap = rows.associateBy { it.date }
             var d = range.start
             val points = mutableListOf<SeriesPoint>()
@@ -186,7 +188,7 @@ class HealthRepositoryImpl @Inject constructor(
                 points += SeriesPoint(
                     bucketStart = Instant.fromEpochMilliseconds(d.atStartOfDayMillis()),
                     value = row?.effectiveTotal(metric, prefs) ?: 0.0,
-                    goal = row?.goal ?: defaultGoal(metric),
+                    goal = liveGoal,
                 )
                 d = d.plus(kotlinx.datetime.DatePeriod(days = 1))
             }
@@ -206,7 +208,9 @@ class HealthRepositoryImpl @Inject constructor(
         return combine(
             summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString()),
             prefsRepo.observeMetricDisplay(),
-        ) { rows, prefs ->
+            goalDao.observeAll(),
+        ) { rows, prefs, goals ->
+            val liveGoal = goals.find { it.metric == metric.name }?.target ?: defaultGoal(metric)
             val rowMap = rows.associateBy { it.date }
             val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
             var d = range.start
@@ -220,11 +224,10 @@ class HealthRepositoryImpl @Inject constructor(
             }
             val points = grouped.toSortedMap().map { (monday, entries) ->
                 val sum = entries.sumOf { (_, row) -> row?.effectiveTotal(metric, prefs) ?: 0.0 }
-                val goal = entries.firstNotNullOfOrNull { (_, row) -> row?.goal } ?: defaultGoal(metric)
                 SeriesPoint(
                     bucketStart = Instant.fromEpochMilliseconds(monday.atStartOfDayMillis()),
                     value = sum,
-                    goal = goal,
+                    goal = liveGoal,
                 )
             }
             MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
@@ -238,7 +241,9 @@ class HealthRepositoryImpl @Inject constructor(
         return combine(
             summaryDao.observeRange(metric.name, range.start.toString(), range.endInclusive.toString()),
             prefsRepo.observeMetricDisplay(),
-        ) { rows, prefs ->
+            goalDao.observeAll(),
+        ) { rows, prefs, goals ->
+            val liveGoal = goals.find { it.metric == metric.name }?.target ?: defaultGoal(metric)
             val rowMap = rows.associateBy { it.date }
             val dailyEntries = mutableListOf<Pair<LocalDate, SummaryDailyMetricEntity?>>()
             var d = range.start
@@ -251,11 +256,10 @@ class HealthRepositoryImpl @Inject constructor(
             }
             val points = grouped.toSortedMap().map { (firstOfMonth, entries) ->
                 val sum = entries.sumOf { (_, row) -> row?.effectiveTotal(metric, prefs) ?: 0.0 }
-                val goal = entries.firstNotNullOfOrNull { (_, row) -> row?.goal } ?: defaultGoal(metric)
                 SeriesPoint(
                     bucketStart = Instant.fromEpochMilliseconds(firstOfMonth.atStartOfDayMillis()),
                     value = sum,
-                    goal = goal,
+                    goal = liveGoal,
                 )
             }
             MetricSeries(metric = metric, range = range, aggregation = Aggregation.Sum, points = points)
